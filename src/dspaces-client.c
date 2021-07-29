@@ -66,11 +66,14 @@ struct dspaces_client {
     hg_id_t kill_client_id;
     hg_id_t sub_id;
     hg_id_t notify_id;
+    hg_id_t execute_id;
+
     struct dc_gspace *dcg;
-    char **server_address;
+    char **server_address; // this stores all the server addresses
     char **node_names;
     char my_node_name[HOST_NAME_MAX];
-    int my_server;
+    int my_server; // this value records id of current server, we can get proper
+                   // addr based on this
     int size_sp;
     int rank;
     int local_put_count; // used during finalize
@@ -477,14 +480,18 @@ static int dspaces_init_internal(int rank, dspaces_client_t *c)
 }
 
 static int dspaces_init_margo(dspaces_client_t client,
-                              const char *listen_addr_str)
+                              const char *listen_addr_str,
+                              struct hg_init_info *hii_ptr)
 {
     hg_class_t *hg;
     int i;
 
     ABT_init(0, NULL);
 
-    client->mid = margo_init(listen_addr_str, MARGO_SERVER_MODE, 0, 0);
+    // client->mid = margo_init(listen_addr_str, MARGO_SERVER_MODE, 0, 0);
+    client->mid =
+        margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, hii_ptr, 1, 1);
+
     if(!client->mid) {
         fprintf(stderr, "ERROR: %s: margo_init() failed.\n", __func__);
         return (dspaces_ERR_MERCURY);
@@ -538,6 +545,9 @@ static int dspaces_init_margo(dspaces_client_t client,
         DS_HG_REGISTER(hg, client->notify_id, odsc_list_t, void, notify_rpc);
         margo_registered_name(client->mid, "query_meta_rpc",
                               &client->query_meta_id, &flag);
+        margo_registered_name(client->mid, "execute_rpc", &client->execute_id,
+                              &flag);
+
     } else {
         client->put_id = MARGO_REGISTER(client->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, NULL);
@@ -585,6 +595,8 @@ static int dspaces_init_margo(dspaces_client_t client,
                             NULL);
         margo_registered_disable_response(client->mid, client->notify_id,
                                           HG_TRUE);
+        client->execute_id =
+            MARGO_REGISTER(client->mid, "execute_rpc", int32_t, int32_t, NULL);
     }
 
     return (dspaces_SUCCESS);
@@ -605,7 +617,7 @@ static int dspaces_post_init(dspaces_client_t client)
     return (dspaces_SUCCESS);
 }
 
-int dspaces_init(int rank, dspaces_client_t *c)
+int dspaces_init(int rank, dspaces_client_t *c, struct hg_init_info *hii_ptr)
 {
     dspaces_client_t client;
     char *listen_addr_str;
@@ -621,7 +633,9 @@ int dspaces_init(int rank, dspaces_client_t *c)
         return (ret);
     }
 
-    dspaces_init_margo(client, listen_addr_str);
+    DEBUG_OUT("load the listen protocol %s.\n", listen_addr_str);
+
+    dspaces_init_margo(client, listen_addr_str, hii_ptr);
 
     free(listen_addr_str);
 
@@ -650,7 +664,7 @@ int dspaces_init_mpi(MPI_Comm comm, dspaces_client_t *c)
     if(ret != 0) {
         return (ret);
     }
-    dspaces_init_margo(client, listen_addr_str);
+    dspaces_init_margo(client, listen_addr_str, NULL);
     free(listen_addr_str);
 
     dspaces_post_init(client);
@@ -1602,6 +1616,64 @@ static void notify_rpc(hg_handle_t handle)
     free_sub_req(subh->req);
 }
 DEFINE_MARGO_RPC_HANDLER(notify_rpc)
+
+int dspaces_execute(dspaces_client_t client, int32_t iteration)
+{
+    // key varaibles
+    hg_return_t hret;
+    hg_addr_t server_addr;
+    hg_handle_t handle;
+
+    // parameter in and out
+    execute_in_t exec_in;
+    execute_out_t exec_out;
+
+    exec_in.iteration = iteration;
+
+    // TODO, the client code for the execute rpc
+    get_server_address(client, &server_addr);
+
+    char addr_str[128];
+    size_t addr_str_size = 128;
+    margo_addr_to_string(client->mid, addr_str, &addr_str_size, server_addr);
+
+    DEBUG_OUT("execute client rank %d my_server %d server addr %s\n",
+              client->rank, client->my_server, addr_str);
+              
+    hret = margo_create(client->mid, server_addr, client->execute_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n", __func__,
+                hret);
+        return dspaces_ERR_MERCURY;
+    }
+    hret = margo_forward(handle, &exec_in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
+                __func__, hret);
+        goto err_hg_handle;
+    }
+    hret = margo_get_output(handle, &exec_out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",
+                __func__, hret);
+        goto err_hg_output;
+    }
+
+    DEBUG_OUT("iteration %d, get the execute rpc results %d\n", iteration,
+              exec_out.ret);
+
+    int ret = exec_out.ret;
+    margo_free_output(handle, &exec_out);
+    margo_destroy(handle);
+    margo_addr_free(client->mid, server_addr);
+    return ret;
+
+err_hg_output:
+    margo_free_output(handle, &exec_out);
+err_hg_handle:
+    margo_destroy(handle);
+    return dspaces_ERR_MERCURY;
+}
 
 static void register_client_sub(dspaces_client_t client,
                                 struct dspaces_sub_handle *subh)

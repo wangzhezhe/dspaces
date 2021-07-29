@@ -11,6 +11,8 @@
 #include <dspaces-common.h>
 #include <mpi.h>
 #include <stdint.h>
+#include <margo.h>
+#include <mercury.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -30,7 +32,8 @@ typedef struct dspaces_client *dspaces_client_t;
  *
  * @return dspaces_SUCCESS or error code defined in dspaces-common.h
  */
-int dspaces_init(int rank, dspaces_client_t *client);
+//int dspaces_init(int rank, dspaces_client_t *client);
+int dspaces_init(int rank, dspaces_client_t *c, struct hg_init_info *hii_ptr);
 
 /**
  * @brief Creates a dspaces client. Uses MPI primitives for scalable initialization.
@@ -317,6 +320,16 @@ int dspaces_put_meta(dspaces_client_t client, char *name, int version,
 int dspaces_get_meta(dspaces_client_t client, char *name, int mode,
                      int current, int *version, void **data,
                      unsigned int *len);
+
+/**
+ * @brief execute sth in staging area
+ *
+ *
+ * @param[in] client dspaces client
+ * @param[in] iteration number
+ */
+int dspaces_execute(dspaces_client_t client, int32_t iteration);
+
 
 #if defined(__cplusplus)
 }

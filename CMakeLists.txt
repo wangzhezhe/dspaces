@@ -9,7 +9,8 @@
 #
 
 cmake_minimum_required (VERSION 3.0)
-project (dspaces VERSION 2.2.0 LANGUAGES C)
+project (dspaces VERSION 2.2.0 LANGUAGES C CXX)
+set (CMAKE_CXX_STANDARD 14)
 #enable_testing ()
 
 include(GNUInstallDirs)
@@ -56,6 +57,7 @@ include (xpkg-import)
 xpkg_import_module (margo REQUIRED margo)
 
 find_package(MPI COMPONENTS REQUIRED)
+include_directories(${MPI_C_INCLUDE_PATH})
 
 include(CheckLanguage)
 check_language(Fortran)
@@ -68,7 +70,7 @@ endif()
 
 add_subdirectory(src)
 add_subdirectory(include)
-add_subdirectory(bindings)
+#add_subdirectory(bindings)
 if(${ENABLE_TESTS})
   enable_testing()
   add_subdirectory(tests)

@@ -11,6 +11,8 @@
 #include <dspaces-common.h>
 #include <mpi.h>
 #include <stdio.h>
+#include <margo.h>
+#include <mercury.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -30,8 +32,7 @@ typedef struct dspaces_provider *dspaces_provider_t;
  * @return MESSAGING_SUCCESS or error code defined in messaging-common.h
  */
 int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
-                        dspaces_provider_t *server);
-
+                        dspaces_provider_t *sv, struct hg_init_info *hii_ptr);          
 /**
  * @brief Waits for the dataspaces server to finish (be killed.)
  *

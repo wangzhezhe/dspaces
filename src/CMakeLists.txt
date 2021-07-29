@@ -10,7 +10,7 @@ set (dspaces-pkg "share/cmake/dspaces")
 set (dspaces-vers "${dspaces_VERSION_MAJOR}.${dspaces_VERSION_MINOR}")
 
 add_library(dspaces ${dspaces-src})
-target_link_libraries (dspaces margo m pthread)
+target_link_libraries (dspaces margo m pthread MPI::MPI_C)
 target_include_directories (dspaces PUBLIC $<INSTALL_INTERFACE:include>)
 
 # local include's BEFORE, in case old incompatable .h files in prefix/include

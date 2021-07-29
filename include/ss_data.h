@@ -14,7 +14,6 @@
 #include "list.h"
 #include <margo.h>
 #include <mercury.h>
-#include <mercury_atomic.h>
 #include <mercury_bulk.h>
 #include <mercury_macros.h>
 #include <mercury_proc_string.h>
@@ -291,6 +290,9 @@ MERCURY_GEN_PROC(odsc_gdim_t,
                  ((odsc_hdr_with_gdim)(odsc_gdim))((int32_t)(param)))
 MERCURY_GEN_PROC(odsc_list_t, ((odsc_hdr)(odsc_list))((int32_t)(param)))
 MERCURY_GEN_PROC(ss_information, ((odsc_hdr)(ss_buf)))
+
+MERCURY_GEN_PROC(execute_in_t, ((int32_t)(iteration)))
+MERCURY_GEN_PROC(execute_out_t, ((int32_t)(ret)))
 
 char *obj_desc_sprint(obj_descriptor *);
 //
