@@ -447,7 +447,7 @@ void bbox_to_origin(struct bbox *bb, const struct bbox *bb_glb)
     int i;
 
     if(bb->num_dims != bb_glb->num_dims) {
-        fprintf(stderr, "ERROR: '%s()': dimensionality mismatch.\n", __func__);
+        fprintf(stderr, "ERROR: '%s()': dimensionality mismatch. %d %d \n", __func__,bb->num_dims,bb_glb->num_dims);
     }
 
     bb->num_dims = bb_glb->num_dims;

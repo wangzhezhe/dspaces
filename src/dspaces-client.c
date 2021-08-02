@@ -74,7 +74,7 @@ struct dspaces_client {
     char my_node_name[HOST_NAME_MAX];
     int my_server; // this value records id of current server, we can get proper
                    // addr based on this
-    int size_sp;
+    int size_sp;   // the size of the server process
     int rank;
     int local_put_count; // used during finalize
     int f_debug;
@@ -738,9 +738,9 @@ void dspaces_define_gdim(dspaces_client_t client, const char *var_name,
     }
 }
 
-int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
-                int elem_size, int ndim, uint64_t *lb, uint64_t *ub,
-                const void *data)
+int dspaces_put(dspaces_client_t client, const char *var_name, int flags,
+                unsigned int ver, int elem_size, int ndim, uint64_t *lb,
+                uint64_t *ub, const void *data)
 {
     hg_addr_t server_addr;
     hg_handle_t handle;
@@ -750,7 +750,7 @@ int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
     obj_descriptor odsc = {.version = ver,
                            .owner = {0},
                            .st = st,
-                           .flags = 0,
+                           .flags = flags,
                            .size = elem_size,
                            .bb = {
                                .num_dims = ndim,
@@ -1617,8 +1617,15 @@ static void notify_rpc(hg_handle_t handle)
 }
 DEFINE_MARGO_RPC_HANDLER(notify_rpc)
 
-int dspaces_execute(dspaces_client_t client, int32_t iteration)
+// we just need client to go through all the server addr and call its execution
+// func
+int dspaces_execute(dspaces_client_t client, int32_t iteration, int rank)
 {
+    // non zero rank return direactlys
+    if(rank != 0) {
+        return 0;
+    }
+
     // key varaibles
     hg_return_t hret;
     hg_addr_t server_addr;
@@ -1630,43 +1637,56 @@ int dspaces_execute(dspaces_client_t client, int32_t iteration)
 
     exec_in.iteration = iteration;
 
-    // TODO, the client code for the execute rpc
-    get_server_address(client, &server_addr);
+    // range the server addr
+    // then send the execute rpc with the unblock call
+    // assume there is less than 128 processes
+    margo_request reqs[128];
+    for(int i = 0; i < client->size_sp; i++) {
+        margo_addr_lookup(client->mid, client->server_address[i], &server_addr);
 
-    char addr_str[128];
-    size_t addr_str_size = 128;
-    margo_addr_to_string(client->mid, addr_str, &addr_str_size, server_addr);
+        char addr_str[128];
+        size_t addr_str_size = 128;
+        margo_addr_to_string(client->mid, addr_str, &addr_str_size,
+                             server_addr);
 
-    DEBUG_OUT("execute client rank %d my_server %d server addr %s\n",
-              client->rank, client->my_server, addr_str);
-              
-    hret = margo_create(client->mid, server_addr, client->execute_id, &handle);
-    if(hret != HG_SUCCESS) {
-        fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n", __func__,
-                hret);
-        return dspaces_ERR_MERCURY;
+        DEBUG_OUT("execute client rank %d my_server %d server addr %s\n",
+                  client->rank, client->my_server, addr_str);
+
+        hret =
+            margo_create(client->mid, server_addr, client->execute_id, &handle);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n",
+                    __func__, hret);
+            return dspaces_ERR_MERCURY;
+        }
+        hret = margo_iforward(handle, &exec_in, &reqs[i]);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
+                    __func__, hret);
+            goto err_hg_handle;
+        }
     }
-    hret = margo_forward(handle, &exec_in);
-    if(hret != HG_SUCCESS) {
-        fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
-                __func__, hret);
-        goto err_hg_handle;
-    }
-    hret = margo_get_output(handle, &exec_out);
-    if(hret != HG_SUCCESS) {
-        fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",
-                __func__, hret);
-        goto err_hg_output;
-    }
+    // wait the results
+    for(int i = 0; i < client->size_sp; i++) {
+        margo_wait(reqs[i]);
+        hret = margo_get_output(handle, &exec_out);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",
+                    __func__, hret);
+            goto err_hg_output;
 
-    DEBUG_OUT("iteration %d, get the execute rpc results %d\n", iteration,
-              exec_out.ret);
+            DEBUG_OUT(
+                "iteration %d server id %d , get the execute rpc results %d\n",
+                iteration, i, exec_out.ret);
 
-    int ret = exec_out.ret;
+            int ret = exec_out.ret;
+        }
+    }
     margo_free_output(handle, &exec_out);
     margo_destroy(handle);
     margo_addr_free(client->mid, server_addr);
-    return ret;
+
+    return 0;
 
 err_hg_output:
     margo_free_output(handle, &exec_out);

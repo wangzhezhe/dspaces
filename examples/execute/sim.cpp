@@ -3,10 +3,15 @@
 #include <fstream>
 #include <iostream>
 #include <margo.h>
+#include <mb.hpp>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <vector>
+
+#include <time.h>
+#define BILLION 1000000000L
 
 extern "C" {
 #include <rdmacred.h>
@@ -21,13 +26,30 @@ extern "C" {
         }                                                                      \
     } while(0)
 
+size_t int2size_t(int val)
+{
+    return (val < 0) ? __SIZE_MAX__ : (size_t)((unsigned)val);
+}
+
 int main(int argc, char **argv)
 {
+    if(argc != 3) {
+        std::cout << "binary <blockLen> <totalblockNumber>" << std::endl;
+        exit(0);
+    }
+
+    int blockLen = std::stoi(argv[1]);
+    int totalBlockNumber = std::stoi(argv[2]);
 
     int rank, procs;
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &procs);
+
+    if(rank == 0) {
+        std::cout << "blockLen is " << blockLen << "totalBlockNumber size is"
+                  << totalBlockNumber << std::endl;
+    }
 
     // load the drc file
     std::string g_drc_file = "dspaces_drc.config";
@@ -62,52 +84,102 @@ int main(int argc, char **argv)
 
     int timestep = 0;
 
+    // initilize data for computation
+    std::vector<Mandelbulb> MandelbulbList;
     while(timestep < 10) {
         timestep++;
-        sleep(2);
+        /* mb compute the data, provide necessary parameters*/
+        MPI_Barrier(MPI_COMM_WORLD);
+        struct timespec computeStart, computeEnd;
+        clock_gettime(CLOCK_REALTIME, &computeStart);
+
+        unsigned reminder = 0;
+        if(totalBlockNumber % procs != 0) {
+            // the last process will process the reminder
+            reminder = (totalBlockNumber) % unsigned(procs);
+        }
+
+        unsigned nblocks_per_proc = totalBlockNumber / procs;
+        if(rank < reminder) {
+            // some process need to procee more than one
+            nblocks_per_proc = nblocks_per_proc + 1;
+        }
+        // this value will vary when there is process join/leave
+        // compare the nblocks_per_proc to see if it change
+        MandelbulbList.clear();
+
+        // caculate the order
+        double order = 4.0 + ((double)timestep) * 8.0 / 100.0;
+
+        // update the data list
+        // we may need to do some data marshal here, when the i is small, the
+        // time is shor when the i is large, the time is long, there is
+        // unbalance here the index should be 0, n-1, 1, n-2, ... the block id
+        // base may also need to be updated? init the list
+        int rank_offset = procs;
+        int blockid = rank;
+        // we use the simplified block and let width equals to heights equals to
+        // depth
+        for(int i = 0; i < nblocks_per_proc; i++) {
+            if(blockid >= totalBlockNumber) {
+                continue;
+            }
+            int block_offset = blockid * blockLen;
+            // the block offset need to be recaculated, we can not use the
+            // resize function
+            MandelbulbList.push_back(Mandelbulb(blockLen, blockLen, blockLen,
+                                                block_offset, 1.2, blockid,
+                                                totalBlockNumber));
+            blockid = blockid + rank_offset;
+        }
+
+        // compute list (this is time consuming part)
+        for(int i = 0; i < nblocks_per_proc; i++) {
+            MandelbulbList[i].compute(order);
+        }
+
+        // wait finish for all processes
+
+        MPI_Barrier(MPI_COMM_WORLD);
+        clock_gettime(CLOCK_REALTIME, &computeEnd);
+
+        if(rank == 0) {
+            double computeDiff =
+                (computeEnd.tv_sec - computeStart.tv_sec) * 1.0 +
+                (computeEnd.tv_nsec - computeStart.tv_nsec) * 1.0 / BILLION;
+
+            std::cout << "iteration " << timestep << " nblocks_per_proc "
+                      << nblocks_per_proc << " compute time is " << computeDiff
+                      << std::endl;
+        }
+
+        /* the stage of transfering data into the data staging service */
 
         // Name the Data that will be writen
-        char var_name[128];
-        sprintf(var_name, "ex1_sample_data");
+        char varName[128];
+        sprintf(varName, "mb");
+        int ndim = 3;
 
-        // Create integer array, size 3
-        int *data = (int *)malloc(3 * sizeof(int));
+        // range the list and put the data
+        int listSize = MandelbulbList.size();
+        for(int i = 0; i < listSize; i++) {
+            // caculate the lb and ub, the sequence is depth, width and heights
+            // the common expression is the offset and the extents
+            // we need to transfer it to the lb and ub whihc is required by the
+            // dspsaces the lb is actually the offset of the mb data
+            int *extents = MandelbulbList[i].GetExtents();
+            uint64_t lb[3] = {MandelbulbList[i].GetZoffset(), 0, 0};
+            uint64_t ub[3] = {lb[0] + int2size_t(*(extents + 1)),
+                              lb[1] + int2size_t(*(extents + 3)),
+                              lb[2] + int2size_t(*(extents + 5))};
+            int flag = MandelbulbList[i].GetBlockID();
+            dspaces_put(client, varName, flag, timestep, sizeof(int), ndim, lb,
+                        ub, MandelbulbList[i].GetData());
+        }
 
-        // Initialize Random Number Generator
-        srand(time(NULL));
-
-        // Populate data array with random values from 0 to 99
-        data[0] = rand() % 100;
-        data[1] = rand() % 100;
-        data[2] = rand() % 100;
-
-        printf("Timestep %d: put data %d %d %d\n", timestep, data[0], data[1],
-               data[2]);
-
-        // ndim: Dimensions for application data domain
-        // In this case, our data array is 1 dimensional
-        int ndim = 1;
-
-        // Prepare LOWER and UPPER bound dimensions
-        // In this example, we will put all data into a
-        // small array at the origin upper bound = lower bound = (0,0,0)
-        // In further examples, we will expand this concept.
-        uint64_t lb, ub;
-        lb = 0;
-        ub = 2;
-
-        // DataSpaces: Put data array into the space
-        // Usage: dspaces_put(Name of variable, version num,
-        // size (in bytes of each element), dimensions for bounding box,
-        // lower bound coordinates, upper bound coordinates,
-        // ptr to data buffer
-        dspaces_put(client, var_name, timestep, sizeof(int), ndim, &lb, &ub,
-                    data);
-
-        free(data);
-
-        // TODO then try to execute it here
-        dspaces_execute(client, timestep);
+        MPI_Barrier(MPI_COMM_WORLD);
+        // after putting the data, try to execute
+        dspaces_execute(client, timestep, rank);
     }
 
     // Signal the server to shutdown (the server must receive this signal n

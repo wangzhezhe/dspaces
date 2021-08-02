@@ -24,6 +24,6 @@ do
 done
 
 # start the client for testing
-srun -C haswell -l -N 1 -n 16 ./bin/dsclient_drc &> dsclient_drc.log &
+srun -C haswell -l -N 1 -n 16 ./bin/dsclient_drc 64 64 &> dsclient_drc.log &
 
 wait

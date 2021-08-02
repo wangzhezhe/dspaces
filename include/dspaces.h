@@ -75,6 +75,7 @@ int dspaces_fini(dspaces_client_t client);
  *
  * @param[in] client dspaces client
  * @param[in] var_name:     Name of the variable.
+ * @param[in] flags:    Some external informaiton such as blockid of data blocks.
  * @param[in] ver:      Version of the variable.
  * @param[in] size:     Size (in bytes) for each element of the global
  *              array.
@@ -88,7 +89,7 @@ int dspaces_fini(dspaces_client_t client);
  *
  * @return  0 indicates success.
  */
-int dspaces_put(dspaces_client_t client, const char *var_name, unsigned int ver,
+int dspaces_put(dspaces_client_t client, const char *var_name, int flags, unsigned int ver,
                 int size, int ndim, uint64_t *lb, uint64_t *ub, const void *data);
 
 /**
@@ -328,7 +329,7 @@ int dspaces_get_meta(dspaces_client_t client, char *name, int mode,
  * @param[in] client dspaces client
  * @param[in] iteration number
  */
-int dspaces_execute(dspaces_client_t client, int32_t iteration);
+int dspaces_execute(dspaces_client_t client, int32_t iteration, int rank);
 
 
 #if defined(__cplusplus)

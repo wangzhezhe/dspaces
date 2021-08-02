@@ -1880,7 +1880,7 @@ static void execute_rpc(hg_handle_t handle)
     // TODO, excute the in-staging visulization
     // transfer the data object into the dedicated object firstly
 #ifdef USE_EXECUTION
-    instaging_execution_vis(server->dsg, exec_in.iteration);
+    instaging_execution_vis(server->dsg, exec_in.iteration, server->comm);
 #endif
     exec_out.ret = 0;
 
