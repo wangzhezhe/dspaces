@@ -16,8 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define max(a, b) (a) > (b) ? (a) : (b)
-#define min(a, b) (a) < (b) ? (a) : (b)
+// avoid the 
+#define dsmax(a, b) (a) > (b) ? (a) : (b)
+#define dsmin(a, b) (a) < (b) ? (a) : (b)
 
 #define BBOX_MAX_NDIM 10
 

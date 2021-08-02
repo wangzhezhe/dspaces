@@ -20,6 +20,10 @@
 
 #include <abt.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MAX_VERSIONS 10
 
 #define DS_CLIENT_STORAGE 0x01
@@ -371,5 +375,10 @@ struct lock_data *get_lock(struct list_head *list, char *name);
 struct lock_data *create_lock(struct list_head *list, char *name);
 
 char **addr_str_buf_to_list(char *buf, int num_addrs);
+
+#ifdef __cplusplus
+}
+#endif
+
 
 #endif /* __SS_DATA_H_ */

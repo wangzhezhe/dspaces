@@ -409,7 +409,7 @@ static struct sspace *ssd_alloc_v1(const struct bbox *bb_domain, int num_nodes,
     int i;
     max_dim = bb_domain->ub.c[0];
     for(i = 1; i < bb_domain->num_dims; i++) {
-        max_dim = max(bb_domain->ub.c[i], max_dim);
+        max_dim = dsmax(bb_domain->ub.c[i], max_dim);
     }
     if(max_dim == 0)
         max_dim = 1; // Note: max_dim as 0 would not work...

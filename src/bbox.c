@@ -160,8 +160,8 @@ void bbox_intersect(const struct bbox *b0, const struct bbox *b1,
 
     b2->num_dims = b0->num_dims;
     for(i = 0; i < b0->num_dims; i++) {
-        b2->lb.c[i] = max(b0->lb.c[i], b1->lb.c[i]);
-        b2->ub.c[i] = min(b0->ub.c[i], b1->ub.c[i]);
+        b2->lb.c[i] = dsmax(b0->lb.c[i], b1->lb.c[i]);
+        b2->ub.c[i] = dsmin(b0->ub.c[i], b1->ub.c[i]);
     }
 }
 
