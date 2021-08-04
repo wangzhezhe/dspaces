@@ -80,6 +80,8 @@ struct dspaces_provider {
 
     MPI_Comm comm;
 
+    //TODO add mona comm here
+
     ABT_mutex odsc_mutex;
     ABT_mutex ls_mutex;
     ABT_mutex dht_mutex;
@@ -258,7 +260,9 @@ err_out:
     fprintf(stderr, "%s(): ERROR failed\n", __func__);
     return err;
 }
-
+// try to store everyting at the master
+// and then the worker get info from the master to support elasticity
+// when the client put the data, it also ask the server to get necessary info
 static int write_conf(dspaces_provider_t server, MPI_Comm comm)
 {
     hg_addr_t my_addr = HG_ADDR_NULL;
@@ -703,6 +707,8 @@ static void drain_thread(void *arg)
     }
 }
 
+//TODO add mona comm initilization operation
+//or use another init operation such as mona init
 int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
                         dspaces_provider_t *sv, struct hg_init_info *hii_ptr)
 {

@@ -354,6 +354,8 @@ int obj_desc_equals_no_owner(const obj_descriptor *, const obj_descriptor *);
 
 int obj_desc_equals_intersect(obj_descriptor *odsc1, obj_descriptor *odsc2);
 
+int obj_desc_equals_name_version(obj_descriptor *odsc1, obj_descriptor *odsc2);
+
 int obj_desc_by_name_intersect(const obj_descriptor *odsc1,
                                const obj_descriptor *odsc2);
 

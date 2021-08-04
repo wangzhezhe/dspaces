@@ -343,7 +343,7 @@ FILE *open_conf_ds(dspaces_client_t client)
 
     return (fd);
 }
-
+// fill in the node name and the server addr list
 static int read_conf(dspaces_client_t client, char **listen_addr_str)
 {
     int size;
