@@ -1209,6 +1209,17 @@ int obj_desc_equals_intersect(obj_descriptor *odsc1, obj_descriptor *odsc2)
 }
 
 /*
+ *   Test if two object descriptors have the same name and versions and
+ *     */
+int obj_desc_equals_name_version(obj_descriptor *odsc1, obj_descriptor *odsc2)
+{
+    if(strcmp(odsc1->name, odsc2->name) == 0 &&
+       odsc1->version == odsc2->version)
+        return 1;
+    return 0;
+}
+
+/*
  *   Test if two object descriptors have the same name and their bounding
  *     boxes intersect.
  *     */

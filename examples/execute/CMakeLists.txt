@@ -15,12 +15,37 @@ include_directories(
      ${dspaces_SOURCE_DIR}/examples/execute
 )
 
+
+find_package (Python3)
+
+find_package(ParaView 5.8 REQUIRED COMPONENTS Catalyst PythonCatalyst)
+
+# find VTK
+find_package(VTK COMPONENTS
+CommonDataModel
+ParallelMPI
+FiltersSources
+)
+
+if(NOT PARAVIEW_USE_MPI)
+  message(SEND_ERROR "ParaView must be built with MPI enabled")
+endif()
+find_package(MPI REQUIRED)
+
+
 set(instagingexecution-src
 ${dspaces_SOURCE_DIR}/src/ss_data.c
 instagingexecution.cpp
+MPIInSituAdaptor.cpp
 )
 add_library(instagingexecution ${instagingexecution-src})
-target_link_libraries(instagingexecution margo)
+target_link_libraries(instagingexecution margo
+ParaView::icet 
+ParaView::RemotingViews 
+ParaView::PythonCatalyst 
+VTK::ParallelMPI 
+VTK::CommonDataModel 
+MPI::MPI_C)
 
 
 set(dspaces-drc-server 

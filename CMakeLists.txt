@@ -7,8 +7,8 @@
 #     note that CMAKE_PREFIX_PATH can be a list of directories:
 #      -DCMAKE_PREFIX_PATH='/dir1;/dir2;/dir3'
 #
-
-cmake_minimum_required (VERSION 3.0)
+# use the higher version cmake to avoid the vtk package finding issues
+cmake_minimum_required (VERSION 3.16)
 project (dspaces VERSION 2.2.0 LANGUAGES C CXX)
 set (CMAKE_CXX_STANDARD 14)
 #enable_testing ()

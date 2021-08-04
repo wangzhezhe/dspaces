@@ -8,12 +8,17 @@
 #set necessary env
 export DSPACES_DEBUG=1
 export DSPACES_NUM_HANDLERS=4
+export TOTALBLOCKNUM=64
+export SCRIPTNAME=mbrender_64_iso.py
+export BLOCKLEN=64
 
 # remove unnecessary things
-rm dspaces_drc.config conf.ds
+rm dspaces_drc.config conf.ds *.png
 
 # cp configure file
 cp ~/cworkspace/src/dspaces/examples/execute/dataspaces.conf .
+# cp the render script
+cp ~/cworkspace/src/dspaces/examples/execute/mbrender_64_iso.py .
 
 # start the server
 srun -C haswell -l -N 1 -n 4 ./bin/dsserver_drc gni &> dsserver_drc.log &
@@ -24,6 +29,6 @@ do
 done
 
 # start the client for testing
-srun -C haswell -l -N 1 -n 16 ./bin/dsclient_drc 64 64 &> dsclient_drc.log &
+srun -C haswell -l -N 1 -n 16 ./bin/dsclient_drc $BLOCKLEN $TOTALBLOCKNUM &> dsclient_drc.log &
 
 wait

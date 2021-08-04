@@ -79,6 +79,7 @@ struct dspaces_provider {
     int f_kill;
 
     MPI_Comm comm;
+    //TODO add mona comm here
 
     ABT_mutex odsc_mutex;
     ABT_mutex ls_mutex;
@@ -703,6 +704,8 @@ static void drain_thread(void *arg)
     }
 }
 
+//TODO add mona comm initilization operation
+//or use another init operation such as mona init
 int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
                         dspaces_provider_t *sv, struct hg_init_info *hii_ptr)
 {

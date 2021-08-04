@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH --qos=debug
+#SBATCH --nodes=32
+#SBATCH --time=5:00
+#SBATCH --licenses=cscratch1
+#SBATCH --constraint=haswell
+
+#set necessary env
+#export DSPACES_DEBUG=1
+export DSPACES_NUM_HANDLERS=4
+export TOTALBLOCKNUM=2048
+export SCRIPTNAME=mbrender_64_iso.py
+export BLOCKLEN=64
+
+# remove unnecessary things
+rm dspaces_drc.config conf.ds *.png
+
+# cp configure file
+cp ~/cworkspace/src/dspaces/examples/execute/dataspaces.conf .
+# cp the render script
+cp ~/cworkspace/src/dspaces/examples/execute/mbrender_64_iso.py .
+
+# start the server
+srun -C haswell -l -N 16 -n 64 ./bin/dsserver_drc gni &> dsserver_drc.log &
+
+while [ ! -f conf.ds ]
+do
+  sleep 1 
+done
+
+# start the client for testing
+srun -C haswell -l -N 16 -n 64 ./bin/dsclient_drc $BLOCKLEN $TOTALBLOCKNUM &> dsclient_drc.log &
+
+wait

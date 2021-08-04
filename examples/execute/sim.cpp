@@ -47,7 +47,7 @@ int main(int argc, char **argv)
     MPI_Comm_size(MPI_COMM_WORLD, &procs);
 
     if(rank == 0) {
-        std::cout << "blockLen is " << blockLen << "totalBlockNumber size is"
+        std::cout << "blockLen is " << blockLen << "totalBlockNumber size is "
                   << totalBlockNumber << std::endl;
     }
 
@@ -86,8 +86,7 @@ int main(int argc, char **argv)
 
     // initilize data for computation
     std::vector<Mandelbulb> MandelbulbList;
-    while(timestep < 10) {
-        timestep++;
+    while(timestep < 6) {
         /* mb compute the data, provide necessary parameters*/
         MPI_Barrier(MPI_COMM_WORLD);
         struct timespec computeStart, computeEnd;
@@ -178,8 +177,25 @@ int main(int argc, char **argv)
         }
 
         MPI_Barrier(MPI_COMM_WORLD);
+        struct timespec executeStart, executeEnd;
+        clock_gettime(CLOCK_REALTIME, &executeStart);
+        
         // after putting the data, try to execute
         dspaces_execute(client, timestep, rank);
+
+        MPI_Barrier(MPI_COMM_WORLD);
+        clock_gettime(CLOCK_REALTIME, &executeEnd);
+
+        if(rank == 0) {
+            double executeDiff =
+                (executeEnd.tv_sec - executeStart.tv_sec) * 1.0 +
+                (executeEnd.tv_nsec - executeStart.tv_nsec) * 1.0 / BILLION;
+
+            std::cout << "iteration " << timestep << " execution time is "
+                      << executeDiff << std::endl;
+        }
+
+        timestep++;
     }
 
     // Signal the server to shutdown (the server must receive this signal n
