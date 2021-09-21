@@ -298,6 +298,10 @@ MERCURY_GEN_PROC(ss_information, ((odsc_hdr)(ss_buf)))
 MERCURY_GEN_PROC(execute_in_t, ((int32_t)(iteration)))
 MERCURY_GEN_PROC(execute_out_t, ((int32_t)(ret)))
 
+MERCURY_GEN_PROC(register_addr_in_t, ((hg_string_t)(margoaddr))\
+                                     ((hg_string_t)(monaaddr)))
+MERCURY_GEN_PROC(register_addr_out_t, ((int32_t)(ret)))
+
 char *obj_desc_sprint(obj_descriptor *);
 //
 struct sspace *ssd_alloc(const struct bbox *, int, int,

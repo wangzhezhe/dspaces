@@ -32,6 +32,11 @@ if(NOT PARAVIEW_USE_MPI)
 endif()
 find_package(MPI REQUIRED)
 
+# find Mona packages
+find_package (mona REQUIRED)
+xpkg_import_module (margo REQUIRED margo)
+# find argobots
+pkg_check_modules (ARGOBOTS REQUIRED IMPORTED_TARGET argobots)
 
 set(instagingexecution-src
 ${dspaces_SOURCE_DIR}/src/ss_data.c
@@ -49,14 +54,15 @@ MPI::MPI_C)
 
 
 set(dspaces-drc-server 
-dsserver.cpp 
+dsserver.cpp
+${dspaces_SOURCE_DIR}/src/addmanagement.cpp
 ${dspaces_SOURCE_DIR}/src/util.c 
 ${dspaces_SOURCE_DIR}/src/bbox.c 
 ${dspaces_SOURCE_DIR}/src/ss_data.c
 ${dspaces_SOURCE_DIR}/src/dspaces-server.c
 )
 add_executable(dsserver_drc ${dspaces-drc-server})
-target_link_libraries(dsserver_drc margo MPI::MPI_C ${DRC_LIBRARIES} instagingexecution)
+target_link_libraries(dsserver_drc margo MPI::MPI_C ${DRC_LIBRARIES} instagingexecution mona mercury PkgConfig::ARGOBOTS)
 
 
 set(dspaces-drc-client sim.cpp 

@@ -6,44 +6,57 @@
  */
 
 #include <dspaces-server.h>
+#include <fstream>
 #include <iostream>
 #include <margo.h>
 #include <mercury.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fstream>
+
+#include <mona-coll.h>
+#include <mona.h>
 
 extern "C" {
 #include <rdmacred.h>
 }
 
-#define DIE_IF(cond_expr, err_fmt, ...)                                                            \
-  do                                                                                               \
-  {                                                                                                \
-    if (cond_expr)                                                                                 \
-    {                                                                                              \
-      fprintf(stderr, "ERROR at %s:%d (" #cond_expr "): " err_fmt "\n", __FILE__, __LINE__,        \
-        ##__VA_ARGS__);                                                                            \
-      exit(1);                                                                                     \
-    }                                                                                              \
-  } while (0)
+#define DIE_IF(cond_expr, err_fmt, ...)                                        \
+    do {                                                                       \
+        if(cond_expr) {                                                        \
+            fprintf(stderr, "ERROR at %s:%d (" #cond_expr "): " err_fmt "\n",  \
+                    __FILE__, __LINE__, ##__VA_ARGS__);                        \
+            exit(1);                                                           \
+        }                                                                      \
+    } while(0)
 
 const std::string serverCred = "dspaces_drc.config";
 
 int main(int argc, char **argv)
 {
-    if(argc != 2) {
-        fprintf(stderr, "Usage: %s <listen-address>\n", argv[0]);
+    if(argc != 3) {
+        fprintf(stderr, "Usage: %s <listen-address> <init/elastic>\n", argv[0]);
         return -1;
     }
-
+    // this is protocal label such as gni or tcp
     char *listen_addr_str = argv[1];
+
+    char *status = argv[2];
+
+    int group_elastic = 0;
+
+    if(strcmp(status, "elastic") == 0) {
+        group_elastic = 1;
+    }
 
     dspaces_provider_t s = dspaces_PROVIDER_NULL;
 
+    // create the mona comm
     int rank, procs;
+
     MPI_Init(&argc, &argv);
+    ABT_init(0, NULL);
+
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &procs);
     MPI_Comm gcomm = MPI_COMM_WORLD;
@@ -106,9 +119,29 @@ int main(int argc, char **argv)
         hii.na_init_info.auth_key = drc_key_str;
     }
 
-    int init_ret = dspaces_server_init(listen_addr_str, gcomm, &s, &hii);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // int init_ret = dspaces_server_init(listen_addr_str, gcomm, &s, &hii);
+    // the first parameter of the mona is the protocol
+    mona_instance_t mona =
+        mona_init_thread(listen_addr_str, NA_TRUE, &hii.na_init_info, NA_TRUE);
+
+    // create mona add
+    na_addr_t mona_addr;
+    mona_addr_self(mona, &mona_addr);
+    char mona_addr_buf[256];
+    na_size_t mona_addr_size = 256;
+    mona_addr_to_string(mona, mona_addr_buf, &mona_addr_size, mona_addr);
+    std::cout << "MoNA address is " << std::string(mona_addr_buf) << std::endl;
+
+    // init the server
+    // then register the mona addr to the master
+    int init_ret = dspaces_server_init_mona(listen_addr_str, gcomm, &s,
+                                            mona_addr_buf, group_elastic, &hii);
     if(init_ret != 0)
         return init_ret;
+
+    // we can register the mona addr and create the mona comm here
 
     // make margo wait for finalize
     dspaces_server_fini(s);
@@ -117,6 +150,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "Server is all done!\n");
     }
 
+    mona_addr_free(mona, mona_addr);
+    ABT_finalize();
     MPI_Finalize();
     return 0;
 }

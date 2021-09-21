@@ -23,6 +23,8 @@
 #include <unistd.h>
 // this is for testing
 
+#include "addmanagement.hpp"
+
 #ifdef USE_EXECUTION
 #include <instagingexecution.h>
 #endif
@@ -30,7 +32,7 @@
 #define DEBUG_OUT(args...)                                                     \
     do {                                                                       \
         if(server->f_debug) {                                                  \
-            fprintf(stderr, "Rank %i: %s, line %i (%s): ", server->rank,       \
+            fprintf(stderr, "Rank %i: %s, line %i (%s): ", server->init_rank,  \
                     __FILE__, __LINE__, __func__);                             \
             fprintf(stderr, args);                                             \
         }                                                                      \
@@ -43,6 +45,8 @@ static enum storage_type st = column_major;
 typedef enum obj_update_type { DS_OBJ_NEW, DS_OBJ_OWNER } obj_update_t;
 
 int cond_num = 0;
+
+char *leader_addr_config_file = "ds_leader_addr.conf";
 
 struct addr_list_entry {
     struct list_head entry;
@@ -67,20 +71,22 @@ struct dspaces_provider {
     hg_id_t sub_id;
     hg_id_t notify_id;
     hg_id_t execute_id;
+    hg_id_t register_addr_id;
 
     struct ds_gspace *dsg;
     char **server_address;
     char **node_names;
     char *listen_addr_str;
-    int rank;
+    int init_rank;
     int comm_size;
     int f_debug;
     int f_drain;
     int f_kill;
 
     MPI_Comm comm;
+    // TODO add mona comm here
 
-    //TODO add mona comm here
+    int if_leader;
 
     ABT_mutex odsc_mutex;
     ABT_mutex ls_mutex;
@@ -105,6 +111,7 @@ DECLARE_MARGO_RPC_HANDLER(ss_rpc);
 DECLARE_MARGO_RPC_HANDLER(kill_rpc);
 DECLARE_MARGO_RPC_HANDLER(sub_rpc);
 DECLARE_MARGO_RPC_HANDLER(execute_rpc);
+DECLARE_MARGO_RPC_HANDLER(register_addr_rpc);
 
 static void put_rpc(hg_handle_t h);
 static void put_local_rpc(hg_handle_t h);
@@ -118,6 +125,8 @@ static void ss_rpc(hg_handle_t h);
 static void kill_rpc(hg_handle_t h);
 static void sub_rpc(hg_handle_t h);
 static void execute_rpc(hg_handle_t h);
+static void register_addr_rpc(hg_handle_t h);
+
 // static void write_lock_rpc(hg_handle_t h);
 // static void read_lock_rpc(hg_handle_t h);
 
@@ -260,8 +269,8 @@ err_out:
     fprintf(stderr, "%s(): ERROR failed\n", __func__);
     return err;
 }
-// try to store everyting at the master
-// and then the worker get info from the master to support elasticity
+// try to store everyting at the leader
+// and then the worker get info from the leader to support elasticity
 // when the client put the data, it also ask the server to get necessary info
 static int write_conf(dspaces_provider_t server, MPI_Comm comm)
 {
@@ -346,8 +355,8 @@ static int write_conf(dspaces_provider_t server, MPI_Comm comm)
         server->node_names[i] = &str_buf[sizes_psum[i]];
     }
 
-    MPI_Comm_rank(comm, &server->rank);
-    if(server->rank == 0) {
+    MPI_Comm_rank(comm, &server->init_rank);
+    if(server->init_rank == 0) {
         fd = fopen("conf.ds", "w");
         if(!fd) {
             fprintf(stderr,
@@ -707,8 +716,337 @@ static void drain_thread(void *arg)
     }
 }
 
-//TODO add mona comm initilization operation
-//or use another init operation such as mona init
+int dspaces_server_init_mona(char *listen_addr_str, MPI_Comm comm,
+                             dspaces_provider_t *sv, char *my_mona_addr,
+                             int group_elastic, struct hg_init_info *hii_ptr)
+{
+    const char *envdebug = getenv("DSPACES_DEBUG");
+    const char *envnthreads = getenv("DSPACES_NUM_HANDLERS");
+    const char *envdrain = getenv("DSPACES_DRAIN");
+    dspaces_provider_t server;
+    hg_class_t *hg;
+    static int is_initialized = 0;
+    hg_bool_t flag;
+    hg_id_t id;
+    int num_handlers = DSPACES_DEFAULT_NUM_HANDLERS;
+    int ret;
+
+    if(is_initialized) {
+        fprintf(stderr,
+                "DATASPACES: WARNING: %s: multiple instantiations of the "
+                "dataspaces server is not supported.\n",
+                __func__);
+        return (dspaces_ERR_ALLOCATION);
+    }
+
+    server = (dspaces_provider_t)calloc(1, sizeof(*server));
+    if(server == NULL)
+        return dspaces_ERR_ALLOCATION;
+
+    if(envdebug) {
+        server->f_debug = 1;
+    }
+
+    if(envnthreads) {
+        num_handlers = atoi(envnthreads);
+    }
+
+    if(envdrain) {
+        server->f_drain = 1;
+    }
+
+    MPI_Comm_dup(comm, &server->comm);
+    MPI_Comm_rank(comm, &server->init_rank);
+
+    if(server->init_rank == 0 && group_elastic == 0) {
+        // this is the leader process
+        server->if_leader = 1;
+    } else {
+        server->if_leader = 0;
+    }
+
+    ABT_init(0, NULL);
+    server->mid = margo_init_opt(listen_addr_str, MARGO_SERVER_MODE, hii_ptr, 1,
+                                 num_handlers);
+    if(!server->mid) {
+        fprintf(stderr, "ERROR: %s: margo_init() failed.\n", __func__);
+        return (dspaces_ERR_MERCURY);
+    }
+
+    // get the margo addr from the margo instance
+    hg_addr_t my_address;
+    margo_addr_self(server->mid, &my_address);
+    char my_margo_addr_str[128];
+    size_t addr_str_size = 128;
+    margo_addr_to_string(server->mid, my_margo_addr_str, &addr_str_size,
+                         my_address);
+    margo_addr_free(server->mid, my_address);
+
+    margo_set_log_level(server->mid, MARGO_LOG_INFO);
+    DEBUG_OUT("Server running at address %s and thread number %d\n",
+              my_margo_addr_str, num_handlers);
+
+    // write out the file that contains the leader info
+    if(server->if_leader) {
+        FILE *fd = fopen(leader_addr_config_file, "w");
+        if(!fd) {
+            fprintf(stderr,
+                    "ERROR: %s: unable to open 'ds_leader_addr.conf' for "
+                    "writing.\n",
+                    __func__);
+            exit(-1);
+        }
+        fprintf(fd, "%s\n", my_margo_addr_str);
+        fclose(fd);
+    }
+
+    server->listen_addr_str = strdup(listen_addr_str);
+
+    ret = ABT_mutex_create(&server->odsc_mutex);
+    ret = ABT_mutex_create(&server->ls_mutex);
+    ret = ABT_mutex_create(&server->dht_mutex);
+    ret = ABT_mutex_create(&server->sspace_mutex);
+    ret = ABT_mutex_create(&server->kill_mutex);
+
+    hg = margo_get_class(server->mid);
+
+    // register all kinds of rpcs
+    margo_registered_name(server->mid, "put_rpc", &id, &flag);
+
+    if(flag == HG_TRUE) { /* RPCs already registered */
+        DEBUG_OUT("RPC names already registered. Setting handlers...\n");
+        margo_registered_name(server->mid, "put_rpc", &server->put_id, &flag);
+        DS_HG_REGISTER(hg, server->put_id, bulk_gdim_t, bulk_out_t, put_rpc);
+        margo_registered_name(server->mid, "put_local_rpc",
+                              &server->put_local_id, &flag);
+        DS_HG_REGISTER(hg, server->put_local_id, odsc_gdim_t, bulk_out_t,
+                       put_local_rpc);
+        margo_registered_name(server->mid, "put_meta_rpc", &server->put_meta_id,
+                              &flag);
+        DS_HG_REGISTER(hg, server->put_meta_id, put_meta_in_t, bulk_out_t,
+                       put_meta_rpc);
+        margo_registered_name(server->mid, "get_rpc", &server->get_id, &flag);
+        DS_HG_REGISTER(hg, server->get_id, bulk_in_t, bulk_out_t, get_rpc);
+        margo_registered_name(server->mid, "get_local_rpc",
+                              &server->get_local_id, &flag);
+        margo_registered_name(server->mid, "query_rpc", &server->query_id,
+                              &flag);
+        DS_HG_REGISTER(hg, server->query_id, odsc_gdim_t, odsc_list_t,
+                       query_rpc);
+        margo_registered_name(server->mid, "query_meta_rpc",
+                              &server->query_meta_id, &flag);
+        DS_HG_REGISTER(hg, server->query_meta_id, query_meta_in_t,
+                       query_meta_out_t, query_meta_rpc);
+        margo_registered_name(server->mid, "obj_update_rpc",
+                              &server->obj_update_id, &flag);
+        DS_HG_REGISTER(hg, server->obj_update_id, odsc_gdim_t, void,
+                       obj_update_rpc);
+        margo_registered_name(server->mid, "odsc_internal_rpc",
+                              &server->odsc_internal_id, &flag);
+        DS_HG_REGISTER(hg, server->odsc_internal_id, odsc_gdim_t, odsc_list_t,
+                       odsc_internal_rpc);
+        margo_registered_name(server->mid, "ss_rpc", &server->ss_id, &flag);
+        DS_HG_REGISTER(hg, server->ss_id, void, ss_information, ss_rpc);
+        margo_registered_name(server->mid, "drain_rpc", &server->drain_id,
+                              &flag);
+        margo_registered_name(server->mid, "kill_rpc", &server->kill_id, &flag);
+        DS_HG_REGISTER(hg, server->kill_id, int32_t, void, kill_rpc);
+        margo_registered_name(server->mid, "kill_client_rpc",
+                              &server->kill_client_id, &flag);
+        margo_registered_name(server->mid, "sub_rpc", &server->sub_id, &flag);
+        DS_HG_REGISTER(hg, server->sub_id, odsc_gdim_t, void, sub_rpc);
+        margo_registered_name(server->mid, "notify_rpc", &server->notify_id,
+                              &flag);
+        DS_HG_REGISTER(hg, server->execute_id, int32_t, int32_t, execute_rpc);
+        margo_registered_name(server->mid, "execute_rpc", &server->execute_id,
+                              &flag);
+
+        if(server->if_leader == 1) {
+            DS_HG_REGISTER(hg, server->register_addr_id, register_addr_in_t,
+                           int32_t, register_addr_rpc);
+            margo_registered_name(server->mid, "register_addr_rpc",
+                                  &server->register_addr_id, &flag);
+        }
+    } else {
+        server->put_id = MARGO_REGISTER(server->mid, "put_rpc", bulk_gdim_t,
+                                        bulk_out_t, put_rpc);
+        margo_register_data(server->mid, server->put_id, (void *)server, NULL);
+        server->put_local_id =
+            MARGO_REGISTER(server->mid, "put_local_rpc", odsc_gdim_t,
+                           bulk_out_t, put_local_rpc);
+        margo_register_data(server->mid, server->put_local_id, (void *)server,
+                            NULL);
+        server->put_meta_id =
+            MARGO_REGISTER(server->mid, "put_meta_rpc", put_meta_in_t,
+                           bulk_out_t, put_meta_rpc);
+        margo_register_data(server->mid, server->put_meta_id, (void *)server,
+                            NULL);
+        server->get_id = MARGO_REGISTER(server->mid, "get_rpc", bulk_in_t,
+                                        bulk_out_t, get_rpc);
+        server->get_local_id = MARGO_REGISTER(server->mid, "get_local_rpc",
+                                              bulk_in_t, bulk_out_t, NULL);
+        margo_register_data(server->mid, server->get_id, (void *)server, NULL);
+        server->query_id = MARGO_REGISTER(server->mid, "query_rpc", odsc_gdim_t,
+                                          odsc_list_t, query_rpc);
+        margo_register_data(server->mid, server->query_id, (void *)server,
+                            NULL);
+        server->query_meta_id =
+            MARGO_REGISTER(server->mid, "query_meta_rpc", query_meta_in_t,
+                           query_meta_out_t, query_meta_rpc);
+        margo_register_data(server->mid, server->query_meta_id, (void *)server,
+                            NULL);
+        server->obj_update_id = MARGO_REGISTER(
+            server->mid, "obj_update_rpc", odsc_gdim_t, void, obj_update_rpc);
+        margo_register_data(server->mid, server->obj_update_id, (void *)server,
+                            NULL);
+        margo_registered_disable_response(server->mid, server->obj_update_id,
+                                          HG_TRUE);
+        server->odsc_internal_id =
+            MARGO_REGISTER(server->mid, "odsc_internal_rpc", odsc_gdim_t,
+                           odsc_list_t, odsc_internal_rpc);
+        margo_register_data(server->mid, server->odsc_internal_id,
+                            (void *)server, NULL);
+        server->ss_id =
+            MARGO_REGISTER(server->mid, "ss_rpc", void, ss_information, ss_rpc);
+        margo_register_data(server->mid, server->ss_id, (void *)server, NULL);
+        server->drain_id = MARGO_REGISTER(server->mid, "drain_rpc", bulk_in_t,
+                                          bulk_out_t, NULL);
+        server->kill_id =
+            MARGO_REGISTER(server->mid, "kill_rpc", int32_t, void, kill_rpc);
+        margo_registered_disable_response(server->mid, server->kill_id,
+                                          HG_TRUE);
+        margo_register_data(server->mid, server->kill_id, (void *)server, NULL);
+        server->kill_client_id =
+            MARGO_REGISTER(server->mid, "kill_client_rpc", int32_t, void, NULL);
+        margo_registered_disable_response(server->mid, server->kill_client_id,
+                                          HG_TRUE);
+
+        server->sub_id =
+            MARGO_REGISTER(server->mid, "sub_rpc", odsc_gdim_t, void, sub_rpc);
+        margo_register_data(server->mid, server->sub_id, (void *)server, NULL);
+        margo_registered_disable_response(server->mid, server->sub_id, HG_TRUE);
+        server->notify_id =
+            MARGO_REGISTER(server->mid, "notify_rpc", odsc_list_t, void, NULL);
+        margo_registered_disable_response(server->mid, server->notify_id,
+                                          HG_TRUE);
+        server->execute_id = MARGO_REGISTER(server->mid, "execute_rpc", int32_t,
+                                            int32_t, execute_rpc);
+        margo_register_data(server->mid, server->execute_id, (void *)server,
+                            NULL);
+
+        if(server->if_leader == 1) {
+            server->register_addr_id =
+                MARGO_REGISTER(server->mid, "register_addr_rpc",
+                               register_addr_in_t, int32_t, register_addr_rpc);
+            margo_register_data(server->mid, server->register_addr_id,
+                                (void *)server, NULL);
+        }
+    }
+
+    // execute the dsg_alloc for the init group
+    // do not execute it for the worker or elasticity group
+    if(group_elastic == 0) {
+        int err = dsg_alloc(server, "dataspaces.conf", my_margo_addr_str, );
+    }
+
+    // make sure all processes register the RPC successfully
+    MPI_Barrier(comm);
+
+    // register the margo addr into the leader
+    // if it is the leader, we execute the functinon call
+    // otherwise, we need to get the leader addr from the configuration file
+    if(server->if_leader == 1) {
+        Addrmanager_addMargoAddr(my_margo_addr_str, my_mona_addr);
+    } else {
+        // for the worker processes
+        // register their addr to the leader, the API is registered at this step
+        // extract the margo leader addr by file
+
+        FILE *fd = fopen(leader_addr_config_file, "r");
+        char leader_margo_addr[256];
+
+        if(fd == NULL) {
+            perror("Error opening leader_addr_config_file");
+            exit(1);
+        }
+        fgets(leader_margo_addr, 256, fd);
+        fclose(fd);
+
+        // then send the rpc to the margo leader addr
+        DEBUG_OUT("the worker get the leader margo addr %s\n",
+                  leader_margo_addr);
+        // record the leader addr
+
+        // TODO, register the addr to the leader
+        Addrmanager_addLeaderAddr(leader_margo_addr);
+
+        hg_return_t hret;
+        hg_addr_t leader_hg_addr;
+        hg_handle_t handle;
+        register_addr_in_t register_addr_in;
+        // assign my_margo addr and my_mona_addr to the leader
+        register_addr_in.margoaddr = strdup(my_margo_addr_str);
+        register_addr_in.monaaddr = strdup(my_mona_addr);
+        margo_addr_lookup(server->mid, leader_margo_addr, &leader_hg_addr);
+
+        hret = margo_create(server->mid, leader_hg_addr,
+                            server->register_addr_id, &handle);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n",
+                    __func__, hret);
+            return dspaces_ERR_MERCURY;
+        }
+        hret = margo_forward(handle, &register_addr_in);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
+                    __func__, hret);
+            return dspaces_ERR_MERCURY;
+        }
+        register_addr_out_t register_addr_out;
+        hret = margo_get_output(handle, &register_addr_out);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: (%s): margo_get_output() failed\n",
+                    __func__);
+            margo_destroy(handle);
+            return dspaces_ERR_MERCURY;
+        }
+        if(register_addr_out.ret != 0) {
+            fprintf(stderr, "ERROR: (%s): register_addr did not return zero\n",
+                    __func__);
+            margo_destroy(handle);
+            return dspaces_ERR_MERCURY;
+        }
+    }
+
+    int size_sp = 1;
+    int err = dsg_alloc(server, "dataspaces.conf", comm);
+
+    if(err) {
+        fprintf(stderr,
+                "DATASPACES: ERROR: %s: could not allocate internal "
+                "structures. (%d)\n",
+                __func__, err);
+        return (dspaces_ERR_ALLOCATION);
+    }
+
+    server->f_kill = server->dsg->num_apps;
+
+    if(server->f_drain) {
+        // thread to drain the data
+        ABT_xstream_create(ABT_SCHED_NULL, &server->drain_xstream);
+        ABT_xstream_get_main_pools(server->drain_xstream, 1,
+                                   &server->drain_pool);
+        ABT_thread_create(server->drain_pool, drain_thread, server,
+                          ABT_THREAD_ATTR_NULL, &server->drain_t);
+    }
+
+    *sv = server;
+
+    is_initialized = 1;
+
+    return dspaces_SUCCESS;
+}
+
 int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
                         dspaces_provider_t *sv, struct hg_init_info *hii_ptr)
 {
@@ -748,7 +1086,7 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
     }
 
     MPI_Comm_dup(comm, &server->comm);
-    MPI_Comm_rank(comm, &server->rank);
+    MPI_Comm_rank(comm, &server->init_rank);
 
     ABT_init(0, NULL);
 
@@ -762,14 +1100,15 @@ int dspaces_server_init(char *listen_addr_str, MPI_Comm comm,
 
     hg_addr_t my_address;
     margo_addr_self(server->mid, &my_address);
-    char addr_str[128];
+    char my_margo_addr_str[128];
     size_t addr_str_size = 128;
-    margo_addr_to_string(server->mid, addr_str, &addr_str_size, my_address);
+    margo_addr_to_string(server->mid, my_margo_addr_str, &addr_str_size,
+                         my_address);
     margo_addr_free(server->mid, my_address);
 
     margo_set_log_level(server->mid, MARGO_LOG_INFO);
-    DEBUG_OUT("Server running at address %s and thread number %d\n", addr_str,
-              num_handlers);
+    DEBUG_OUT("Server running at address %s and thread number %d\n",
+              my_margo_addr_str, num_handlers);
 
     server->listen_addr_str = strdup(listen_addr_str);
 
@@ -1038,6 +1377,7 @@ static void put_rpc(hg_handle_t handle)
     }
 
     hret = margo_get_input(handle, &in);
+
     if(hret != HG_SUCCESS) {
         fprintf(stderr,
                 "DATASPACES: ERROR handling %s: margo_get_input() failed with "
@@ -1881,7 +2221,7 @@ static void execute_rpc(hg_handle_t handle)
     // get the input parameter
     // only the iteration for testing
     DEBUG_OUT("received execution for iteration %d server rank %d\n",
-              exec_in.iteration, server->rank);
+              exec_in.iteration, server->init_rank);
 
     // TODO, excute the in-staging visulization
     // transfer the data object into the dedicated object firstly
@@ -1900,6 +2240,42 @@ static void execute_rpc(hg_handle_t handle)
     assert(ret == HG_SUCCESS);
 }
 DEFINE_MARGO_RPC_HANDLER(execute_rpc)
+
+static void register_addr_rpc(hg_handle_t handle)
+{
+    hg_return_t ret;
+
+    // input and output parameters
+    register_addr_in_t register_addr_in;
+    register_addr_out_t register_addr_out;
+
+    // get the attached data
+    margo_instance_id mid = margo_hg_handle_get_instance(handle);
+
+    // get the provider based on registered data
+    const struct hg_info *info = margo_get_info(handle);
+    dspaces_provider_t server =
+        (dspaces_provider_t)margo_registered_data(mid, info->id);
+
+    // get the input data
+    ret = margo_get_input(handle, &register_addr_in);
+    assert(ret == HG_SUCCESS);
+
+    DEBUG_OUT("register rpc is called, margo addr %s, mona addr %s\n",
+              register_addr_in.margoaddr, register_addr_in.monaaddr);
+
+    register_addr_out.ret = 0;
+
+    ret = margo_respond(handle, &register_addr_out);
+    assert(ret == HG_SUCCESS);
+
+    ret = margo_free_input(handle, &register_addr_in);
+    assert(ret == HG_SUCCESS);
+
+    ret = margo_destroy(handle);
+    assert(ret == HG_SUCCESS);
+}
+DEFINE_MARGO_RPC_HANDLER(register_addr_rpc)
 
 void dspaces_server_fini(dspaces_provider_t server)
 {
