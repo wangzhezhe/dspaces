@@ -212,6 +212,12 @@ typedef struct {
     int rank;
 } ss_info_hdr;
 
+//this is the generalized obj
+typedef struct{
+        int64_t size;
+        char *raw_obj;
+}obj_t;
+
 static inline hg_return_t hg_proc_odsc_hdr(hg_proc_t proc, void *arg)
 {
     hg_return_t ret;
@@ -281,6 +287,33 @@ static inline hg_return_t hg_proc_odsc_hdr_with_gdim(hg_proc_t proc, void *arg)
     return HG_SUCCESS;
 }
 
+static inline hg_return_t hg_proc_obj_t(hg_proc_t proc, void *arg)
+{
+  hg_return_t ret;
+  obj_t *in = (obj_t*)arg;
+  ret = hg_proc_hg_size_t(proc, &in->size);
+  if(ret != HG_SUCCESS) return ret;
+  if (in->size) {
+    switch (hg_proc_get_op(proc)) {
+    case HG_ENCODE:
+        ret = hg_proc_raw(proc, in->raw_obj, in->size);
+        if(ret != HG_SUCCESS) return ret;
+      break;
+    case HG_DECODE:
+      in->raw_obj = (char*)malloc(in->size);
+      ret = hg_proc_raw(proc, in->raw_obj, in->size);
+      if(ret != HG_SUCCESS) return ret;
+      break;
+    case HG_FREE:
+      free(in->raw_obj);
+      break;
+    default:
+      break;
+    }
+  }
+  return HG_SUCCESS;
+}
+
 MERCURY_GEN_PROC(bulk_gdim_t, ((odsc_hdr_with_gdim)(odsc))((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_in_t, ((odsc_hdr)(odsc))((hg_bulk_t)(handle)))
 MERCURY_GEN_PROC(bulk_out_t, ((int32_t)(ret)))
@@ -301,6 +334,12 @@ MERCURY_GEN_PROC(execute_out_t, ((int32_t)(ret)))
 MERCURY_GEN_PROC(register_addr_in_t, ((hg_string_t)(margoaddr))\
                                      ((hg_string_t)(monaaddr)))
 MERCURY_GEN_PROC(register_addr_out_t, ((int32_t)(ret)))
+
+//the update mona list that contains added or removed list
+MERCURY_GEN_PROC(update_addrs_in_t, ((obj_t)(added_list))\
+                                     ((obj_t)(removed_list)))
+
+
 
 char *obj_desc_sprint(obj_descriptor *);
 //

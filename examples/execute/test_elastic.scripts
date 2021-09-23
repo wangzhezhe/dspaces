@@ -1,0 +1,53 @@
+#!/bin/bash
+#SBATCH --qos=debug
+#SBATCH --nodes=2
+#SBATCH --time=5:00
+#SBATCH --licenses=cscratch1
+#SBATCH --constraint=haswell
+
+#set necessary env
+#export DSPACES_DEBUG=1
+export DSPACES_NUM_HANDLERS=4
+export TOTALBLOCKNUM=2048
+export SCRIPTNAME=mbrender_64_iso.py
+export BLOCKLEN=64
+
+# remove unnecessary things
+rm dspaces_drc.config conf.ds *.png ds_leader_addr.conf
+rm core
+
+ulimit -c unlimited
+
+# current build dir
+cd /global/cscratch1/sd/zw241/dspaces
+
+# cp configure file
+cp ~/cworkspace/src/dspaces/examples/execute/dataspaces.conf .
+# cp the render script
+cp ~/cworkspace/src/dspaces/examples/execute/mbrender_64_iso.py .
+
+SERVERPROCESS=4
+
+# start the server
+srun -C haswell -l -N 1 -n $SERVERPROCESS ./bin/dsserver_drc gni init &> dsserver_drc_init.log &
+
+while [ ! -f conf.ds ]
+do
+  sleep 1 
+done
+
+#make sure the server load the pipeline
+result=0
+while [ $result -ne $SERVERPROCESS ]
+do
+    result=$(cat dsserver_drc_init.log | grep "Server running at" | wc -l)
+    echo "$result server loaded backend"
+    sleep 1  
+done
+
+#when all init server process start, we may try to start elastic group
+
+srun -C haswell -l -N 1 -n 2 ./bin/dsserver_drc gni elastic &> dsserver_drc_elastic.log &
+
+
+wait

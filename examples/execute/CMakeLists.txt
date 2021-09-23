@@ -55,7 +55,7 @@ MPI::MPI_C)
 
 set(dspaces-drc-server 
 dsserver.cpp
-${dspaces_SOURCE_DIR}/src/addmanagement.cpp
+${dspaces_SOURCE_DIR}/src/addrmanager.cpp
 ${dspaces_SOURCE_DIR}/src/util.c 
 ${dspaces_SOURCE_DIR}/src/bbox.c 
 ${dspaces_SOURCE_DIR}/src/ss_data.c
