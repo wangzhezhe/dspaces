@@ -32,11 +32,14 @@ if(NOT PARAVIEW_USE_MPI)
 endif()
 find_package(MPI REQUIRED)
 
+xpkg_import_module (margo REQUIRED margo)
+
 # find Mona packages
 find_package (mona REQUIRED)
-xpkg_import_module (margo REQUIRED margo)
-# find argobots
+find_package (PkgConfig REQUIRED)
+find_package (mercury REQUIRED)
 pkg_check_modules (ARGOBOTS REQUIRED IMPORTED_TARGET argobots)
+
 
 set(instagingexecution-src
 ${dspaces_SOURCE_DIR}/src/ss_data.c

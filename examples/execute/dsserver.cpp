@@ -153,6 +153,9 @@ int main(int argc, char **argv)
     mona_addr_to_string(mona, mona_addr_buf, &mona_addr_size, mona_addr);
     std::cout << "MoNA address is " << std::string(mona_addr_buf) << std::endl;
 
+    // assign the mona instance to the addrmanager
+    
+
     // init the server
     // then register the mona addr to the master
     int init_ret = dspaces_server_init_mona(listen_addr_str, gcomm, &s,

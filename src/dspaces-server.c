@@ -24,6 +24,8 @@
 // this is for testing
 
 #include "addrmanager.hpp"
+#include <mona-coll.h>
+#include <mona.h>
 
 #ifdef USE_EXECUTION
 #include <instagingexecution.h>
@@ -72,6 +74,7 @@ struct dspaces_provider {
     hg_id_t execute_id;
     hg_id_t register_addr_id;
     hg_id_t update_addrs_id;
+    hg_id_t sync_view_id;
 
     struct ds_gspace *dsg;
     char **server_address;
@@ -113,7 +116,7 @@ DECLARE_MARGO_RPC_HANDLER(sub_rpc);
 DECLARE_MARGO_RPC_HANDLER(execute_rpc);
 DECLARE_MARGO_RPC_HANDLER(register_addr_rpc);
 DECLARE_MARGO_RPC_HANDLER(update_addrs_rpc);
-
+DECLARE_MARGO_RPC_HANDLER(syncview_rpc);
 
 static void put_rpc(hg_handle_t h);
 static void put_local_rpc(hg_handle_t h);
@@ -129,6 +132,7 @@ static void sub_rpc(hg_handle_t h);
 static void execute_rpc(hg_handle_t h);
 static void register_addr_rpc(hg_handle_t h);
 static void update_addrs_rpc(hg_handle_t h);
+static void syncview_rpc(hg_handle_t h);
 
 // static void write_lock_rpc(hg_handle_t h);
 // static void read_lock_rpc(hg_handle_t h);
@@ -720,7 +724,7 @@ static void drain_thread(void *arg)
 }
 
 int dspaces_server_init_mona(char *listen_addr_str, MPI_Comm comm,
-                             dspaces_provider_t *sv, char *my_mona_addr,
+                             dspaces_provider_t *sv, mona_instance_t mona, char *my_mona_addr,
                              int group_elastic, struct hg_init_info *hii_ptr)
 {
     const char *envdebug = getenv("DSPACES_DEBUG");
@@ -868,11 +872,19 @@ int dspaces_server_init_mona(char *listen_addr_str, MPI_Comm comm,
                        int32_t, register_addr_rpc);
         margo_registered_name(server->mid, "register_addr_rpc",
                               &server->register_addr_id, &flag);
-        
+
         DS_HG_REGISTER(hg, server->update_addrs_id, update_addrs_rpc_in_t,
                        int32_t, update_addrs_rpc);
         margo_registered_name(server->mid, "update_addrs_rpc",
                               &server->update_addrs_id, &flag);
+
+        // addr sync view, which should be calle by the client to get the
+        // updated staging view, it return empty if nothing is changed
+        DS_HG_REGISTER(hg, server->sync_view_id, syncview_in_t, syncview_out_t,
+                       syncview_rpc);
+        margo_registered_name(server->mid, "syncview_rpc",
+                              &server->sync_view_id, &flag);
+
     } else {
         server->put_id = MARGO_REGISTER(server->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, put_rpc);
@@ -939,19 +951,26 @@ int dspaces_server_init_mona(char *listen_addr_str, MPI_Comm comm,
                                             int32_t, execute_rpc);
         margo_register_data(server->mid, server->execute_id, (void *)server,
                             NULL);
-        // this rpc is exposed by the leader, the worker call this
+        // this rpc is exposed by the leader, other worker call this
         server->register_addr_id =
             MARGO_REGISTER(server->mid, "register_addr_rpc", register_addr_in_t,
                            int32_t, register_addr_rpc);
         margo_register_data(server->mid, server->register_addr_id,
                             (void *)server, NULL);
 
-        //this rpc is exposed by every process
+        // this rpc is exposed by every process
         server->update_addrs_id =
             MARGO_REGISTER(server->mid, "update_addrs_rpc", update_addrs_in_t,
                            int32_t, update_addrs_rpc);
         margo_register_data(server->mid, server->update_addrs_id,
                             (void *)server, NULL);
+
+        // theis rpc is exposed by the leader, the client call this
+        server->sync_view_id =
+            MARGO_REGISTER(server->mid, "syncview_rpc", syncview_in_t,
+                           syncview_out_t, syncview_rpc);
+        margo_register_data(server->mid, server->sync_view_id, (void *)server,
+                            NULL);
     }
 
     int size_sp = 1;
@@ -970,6 +989,8 @@ int dspaces_server_init_mona(char *listen_addr_str, MPI_Comm comm,
 
     // make sure all processes register the RPC successfully
     MPI_Barrier(server->comm);
+
+    Addrmanager_addMonaInstance(mona);
 
     // register the margo addr into the leader
     // if it is the leader, we execute the functinon call
@@ -2290,7 +2311,6 @@ static void register_addr_rpc(hg_handle_t handle)
 }
 DEFINE_MARGO_RPC_HANDLER(register_addr_rpc)
 
-
 static void update_addrs_rpc(hg_handle_t handle)
 {
     hg_return_t ret;
@@ -2308,27 +2328,67 @@ static void update_addrs_rpc(hg_handle_t handle)
         (dspaces_provider_t)margo_registered_data(mid, info->id);
 
     // get the input data
-    ret = margo_get_input(handle, &register_addr_in);
+    ret = margo_get_input(handle, &update_addrs_in);
     assert(ret == HG_SUCCESS);
 
-    DEBUG_OUT("register rpc is called, margo addr %s, mona addr %s\n",
-              register_addr_in.margoaddr, register_addr_in.monaaddr);
+    DEBUG_OUT(
+        "update_addrs_rpc is called, added list num %d, removed list num %d\n",
+        update_addrs_in.added_list.size, update_addrs_in.removed_list.size);
 
-
-    //TODO, call the updateList function in the addmanagement
-
-    register_addr_out.ret = 0;
-
-    ret = margo_respond(handle, &register_addr_out);
+    // TODO, call the updateList function in the addrmanager
+    update_addrs_out = 0;
+    ret = margo_respond(handle, &update_addrs_out);
     assert(ret == HG_SUCCESS);
 
-    ret = margo_free_input(handle, &register_addr_in);
+    ret = margo_free_input(handle, &update_addrs_in);
     assert(ret == HG_SUCCESS);
 
     ret = margo_destroy(handle);
     assert(ret == HG_SUCCESS);
 }
-DEFINE_MARGO_RPC_HANDLER(register_addr_rpc)
+DEFINE_MARGO_RPC_HANDLER(update_addrs_rpc)
+
+static void syncview_rpc(hg_handle_t handle)
+{
+    hg_return_t ret;
+
+    // input and output parameters
+    syncview_in_t syncview_in;
+    syncview_out_t syncview_out;
+
+    // get the attached data
+    margo_instance_id mid = margo_hg_handle_get_instance(handle);
+
+    // get the provider based  on registered data
+    const struct hg_info *info = margo_get_info(handle);
+    dspaces_provider_t server =
+        (dspaces_provider_t)margo_registered_data(mid, info->id);
+
+    // get the input data
+    ret = margo_get_input(handle, &syncview_in);
+    assert(ret == HG_SUCCESS);
+
+    DEBUG_OUT("syncview_rpc is called, iteration %d, expected number %d\n",
+              syncview_in.iteration, syncview_in.expectedprocess);
+
+    syncview_out = Addrmanager_syncview(server, syncview_in.iteration,
+                                        syncview_in.expectedprocess);
+
+    ret = margo_respond(handle, &syncview_out);
+    assert(ret == HG_SUCCESS);
+
+    ret = margo_free_input(handle, &syncview_out);
+    assert(ret == HG_SUCCESS);
+
+    ret = margo_destroy(handle);
+    assert(ret == HG_SUCCESS);
+
+    // free things in syncview_out
+    if(syncview_out.addrlist.raw_obj != NULL) {
+        free(syncview_out.raw_obj);
+    }
+}
+DEFINE_MARGO_RPC_HANDLER(syncview_rpc)
 
 void dspaces_server_fini(dspaces_provider_t server)
 {

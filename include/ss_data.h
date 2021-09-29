@@ -338,7 +338,11 @@ MERCURY_GEN_PROC(register_addr_out_t, ((int32_t)(ret)))
 //the update mona list that contains added or removed list
 MERCURY_GEN_PROC(update_addrs_in_t, ((obj_t)(added_list))\
                                      ((obj_t)(removed_list)))
+MERCURY_GEN_PROC(update_addrs_out_t, ((int32_t)(ret)))
 
+MERCURY_GEN_PROC(syncview_in_t, ((int32_t)(iteration))\
+                                     ((int32_t)(expectedprocess)))
+MERCURY_GEN_PROC(syncview_out_t, ((obj_t)(addrlist)))
 
 
 char *obj_desc_sprint(obj_descriptor *);

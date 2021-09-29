@@ -1,9 +1,7 @@
-#include "addmanagement.hpp"
+#include "addrmanager.hpp"
 #include <abt.h>
 #include <iostream>
 #include <map>
-#include <mona-coll.h>
-#include <mona.h>
 #include <set>
 #include <spdlog/spdlog.h>
 #include <ss_data.h>
@@ -43,6 +41,8 @@ struct StagingLeaderMeta {
     // they are used to notify staging workers
     std::vector<std::string> m_added_list;
     std::vector<std::string> m_removed_list;
+    // this set stores the addrs that are added first time into the existing
+    // communication group
     std::set<std::string> m_first_added_set;
 
     bool addrDiff()
@@ -97,6 +97,7 @@ int Addrmanager_addMargoAddr(char *margoAddrstr, char *monaAddrstr)
 
     ABT_mutex_lock(m_stageleader_meta.m_monaAddrmap_mtx);
     // if the current addr is not stored into the map
+    // it means that the this addr is added for the first time
     if(m_stageleader_meta.m_mona_addresses_map.find(margoAddr) ==
        m_stageleader_meta.m_mona_addresses_map.end()) {
         // this addr is not exist in the map
@@ -129,8 +130,8 @@ void Addrmanager_addLeaderAddr(char *margoAddrstr)
 // the return things contains two structure, the first one is the number of addr
 // the second one is the details of the addrs
 // we need to set the expected number before calling this
-obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
-                           int &clientProcessNum)
+obj_t Addrmanager_syncview(dspaces_provider_t server, int iteration,
+                           int clientProcessNum)
 {
     if(this->m_stageleader_meta->m_expected_worker_num == -1) {
         throw std::runtime_error(
@@ -162,13 +163,12 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
            this->m_stageleader_meta->m_expected_worker_num) {
             spdlog::debug("iteration {} client process number equals to server",
                           iteration);
-
-            // the returned list is empty in this case
-            obj_t addrList;
-            addrList.size = 0;
-            addrList.raw_obj = NULL;
-
-            return (addrList);
+            obj_t currentMonaAddrList;
+            // when nothing changed
+            // we return an empty mona addr list
+            currentMonaAddrList.size = 0;
+            currentMonaAddrList.raw_obj = NULL;
+            return currentMonaAddrList;
         }
     }
 
@@ -178,7 +178,6 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
     // if these two number do not equal with each other, we just wait here
     while(this->m_stageleader_meta->addrDiff()) {
         // there is still process that do not update its addr
-
         spdlog::debug("wait, current expected process {} addr map size {}",
                       this->m_stageleader_meta->m_expected_worker_num,
                       this->m_stageleader_meta->m_mona_addresses_map.size());
@@ -188,10 +187,12 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
     // if expected process equals to the actual one, the leader owns the latest
     // view, it propagate this view to all members
     // it ranges the map and call updateMonaAddrList
-    // TODO, expose the updateMonaAddrList for each processes
-    tl::remote_procedure updateMonaAddrListRPC =
-        // send req to workers
-        this->get_engine().define("updateMonaAddrList");
+
+    // tl::remote_procedure updateMonaAddrListRPC =
+    // send req to workers
+    //    this->get_engine().define("updateMonaAddrList");
+    // prepare the handle
+
     {
         std::lock_guard<tl::mutex> lock(
             this->m_stageleader_meta->m_monaAddrmap_mtx);
@@ -202,83 +203,167 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
                      iteration, this->m_stageleader_meta->m_added_list.size(),
                      this->m_stageleader_meta->m_removed_list.size());
 
-        //UpdatedMonaList updatedMonaList(
+        // UpdatedMonaList updatedMonaList(
         //    this->m_stageleader_meta->m_added_list,
         //    this->m_stageleader_meta->m_removed_list);
-        
-        //create the updatedMonaList structure
-        
-        std::unique_ptr<UpdatedMonaList> updatedMonaListAll;
+
+        // prepare the input
+        update_addrs_in_t update_addrs_existing;
+        // add existing addedlist and removed list here
+        update_addrs_existing.added_list.size.raw_obj = NULL;
+        update_addrs_existing.removed_list.raw_obj = NULL;
+
+        update_addrs_existing.added_list.size =
+            this->m_stageleader_meta->m_added_list.size();
+        update_addrs_existing.removed_list.size =
+            this->m_stageleader_meta->m_removed_list.size();
+
+        if(update_addrs_existing.added_list.size > 0) {
+            update_addrs_existing.added_list.raw_obj = (char *)calloc(
+                256 * update_addrs_existing.added_list.size, sizeof(char));
+        }
+
+        if(update_addrs_existing.removed_list.size > 0) {
+            update_addrs_existing.removed_list.raw_obj = (char *)calloc(
+                256 * update_addrs_existing.removed_list.size, sizeof(char));
+        }
+
+        for(int i = 0; i < update_addrs_existing.added_list.size; i++) {
+            memcpy(update_addrs_existing.added_list.raw_obj + i * 256,
+                   this->m_stageleader_meta->m_added_list[i].c_str(),
+                   this->m_stageleader_meta->m_added_list[i].size());
+        }
+
+        for(int i = 0; i < update_addrs_existing.removed_list.size; i++) {
+            memcpy(update_addrs_existing.removed_list.raw_obj + i * 256,
+                   this->m_stageleader_meta->m_removed_list[i].c_str(),
+                   this->m_stageleader_meta->m_removed_list[i].size());
+        }
+
+        // fill in the update addrs all
+        update_addrs_in_t update_addrs_all;
+
+        // init
+        update_addrs_all.added_list.size = 0;
+        update_addrs_all.added_list.raw_obj = NULL;
+        update_addrs_all.removed_list.size = 0;
+        update_addrs_all.removed_list.raw_obj = NULL;
+
+        // std::unique_ptr<UpdatedMonaList> updatedMonaListAll;
         // When there are process that are added firstly
         // we set the updatedmonalist as all existing mona addrs
         // otherwise, this list is nullptr
         if(this->m_stageleader_meta->m_first_added_set.size() > 0) {
             spdlog::debug("debug iteration {} m_first_added_set {}", iteration,
                           this->m_stageleader_meta->m_first_added_set.size());
-            std::vector<std::string> added;
-            // this is empty
-            std::vector<std::string> removed;
 
+            update_addrs_all.added_list.size =
+                this->m_stageleader_meta->m_mona_addresses_map.size();
+            update_addrs_all.added_list.raw_obj =
+                (char *)calloc(256 * update_addrs_all.added_list.size);
+
+            int offset = 0;
             for(auto &p : this->m_stageleader_meta->m_mona_addresses_map) {
                 // put all mona addr into this
-                added.push_back(p.second);
+                // added.push_back(p.second);
+                // pack the mona addr into the data structs
+                memcpy(update_addrs_all.added_list.raw_obj + offset * 256,
+                       p.second.c_str(), p.second.size());
+                offset++;
             }
             // there is new joined process here
-            updatedMonaListAll = std::make_unique<UpdatedMonaList>(
-                UpdatedMonaList(added, removed));
+            // updatedMonaListAll = std::make_unique<UpdatedMonaList>(
+            // UpdatedMonaList(added, removed));
+            // pack the data into the update_addrs
+            // the len for every addr is 256
+            update_addrs_all.removed_list.size = 0;
+            update_addrs_all.removed_list.raw_obj = NULL;
         }
 
-        // the key is the thallium addr which we should call based on rpc
+        // the key is the margo addr which we should call based on rpc
         for(auto &p : this->m_stageleader_meta->m_mona_addresses_map) {
             // if not self
-            if(this->m_stagecommon_meta->m_thallium_self_addr.compare(
-                   p.first) == 0) {
-                // do not updates to itsself
+            if(this->m_stagecommon_meta->m_margo_self_addr.compare(p.first) ==
+               0) {
+                // do not updates to itsself, this is the leader process
                 continue;
             }
 
             spdlog::debug("iteration {} leader send updated list to {} ",
                           iteration, p.first);
+            // get the margo endpoints
+            hg_return_t hret;
+            hg_addr_t worker_hg_addr;
+            hg_handle_t handle;
+            margo_addr_lookup(server->mid, p.first.c_str(), &worker_hg_addr);
 
-            tl::endpoint workerEndpoint = this->lookup(p.first);
+            hret = margo_create(server->mid, worker_hg_addr,
+                                server->update_addrs_id, &handle);
+            if(hret != HG_SUCCESS) {
+                throw std::runtime_error("margo_create() failed with syncview");
+            }
 
-            // TODO if it belongs to the m_first_added_set, then use all the
-            // list addr otherwise, use the common monaList
+            // tl::endpoint workerEndpoint = this->lookup(p.first);
 
+            // if it belongs to the m_first_added_set, then use all the
+            // list addr, otherwise, use the current existing mona list
             if(this->m_stageleader_meta->m_first_added_set.find(p.first) !=
                this->m_stageleader_meta->m_first_added_set.end()) {
                 // just checking
                 // when current addr is not in the added set
                 // it should not be the monaListA
-                if(updatedMonaListAll.get() != nullptr) {
-                    // use the MonaListAll in this case
-                    int result = updateMonaAddrListRPC.on(workerEndpoint)(
-                        *(updatedMonaListAll.get()));
-                    if(result != 0) {
-                        throw std::runtime_error("failed to notify to worker " +
-                                                 p.first);
+                if(update_addrs_all.added_list.size != 0) {
+                    hret = margo_forward(handle, &update_addrs_all);
+                    if(hret != HG_SUCCESS) {
+                        throw std::runtime_error(
+                            "failed for margo_forward with hret " +
+                            std::string(hret));
+                    }
+                    update_addrs_out_t update_addrs_out;
+                    hret = margo_get_output(handle, &update_addrs_out);
+                    if(hret != HG_SUCCESS) {
+                        throw std::runtime_error(
+                            "failed for margo_get_output with hret " +
+                            std::string(hret));
+                    }
+                    if(update_addrs_out.ret != 0) {
+                        throw std::runtime_error("failed for update_addrs_rpc "
+                                                 "with non zero return value");
                     }
                     spdlog::debug(
                         "iteration {} leader sent updatedMonaListAll ok",
                         iteration);
                 } else {
-                    throw std::runtime_error(
-                        "updatedMonaListAll is not supposed to be empty");
+                    throw std::runtime_error("update_addrs_all.added_list.size "
+                                             "is not supposed to be empty");
                 }
             } else {
-                // TODO use async call here
-                int result =
-                    updateMonaAddrListRPC.on(workerEndpoint)(updatedMonaList);
-                if(result != 0) {
-                    throw std::runtime_error("failed to notify to worker " +
-                                             p.first);
+                // othewise, use the empty case
+                hret = margo_forward(handle, &update_addrs_existing);
+                if(hret != HG_SUCCESS) {
+                    throw std::runtime_error(
+                        "failed for margo_forward with hret " +
+                        std::string(hret));
                 }
+                update_addrs_out_t update_addrs_out;
+                hret = margo_get_output(handle, &update_addrs_out);
+                if(hret != HG_SUCCESS) {
+                    throw std::runtime_error(
+                        "failed for margo_get_output with hret " +
+                        std::string(hret));
+                }
+                if(update_addrs_out.ret != 0) {
+                    throw std::runtime_error("failed for update_addrs_rpc "
+                                             "with non zero return value");
+                }
+
                 spdlog::debug("iteration {} leader sent updatedMonaList ok",
                               iteration);
             }
         }
 
         // also update things to itself's common data
+        // since only the leader process call this function
         for(int i = 0; i < updatedMonaList.m_mona_added_list.size(); i++) {
             this->m_stagecommon_meta->m_monaaddr_set.insert(
                 updatedMonaList.m_mona_added_list[i]);
@@ -290,6 +375,7 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
         }
 
         // recreate the mona comm when it is necessary
+        // when it is the init stage, or when there are new added/deleted list
         if(this->m_stageleader_meta->m_first_added_set.size() > 0 ||
            updatedMonaList.m_mona_added_list.size() > 0 ||
            updatedMonaList.m_mona_remove_list.size() > 0) {
@@ -330,18 +416,48 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int &iteration,
     }
 
     // return current thallium addrs
-    std::vector<std::string> thalliumAddrs;
+    // std::vector<std::string> thalliumAddrs;
+    obj_t margoAddrsList;
 
     {
         std::lock_guard<tl::mutex> lock(
             this->m_stageleader_meta->m_monaAddrmap_mtx);
+
+        margoAddrsList.size =
+            this->m_stageleader_meta->m_mona_addresses_map.size();
+        margoAddrsList.raw_obj =
+            (char *)calloc(256 * margoAddrsList.size, sizeof(char));
+
+        int offset = 0;
         for(auto &p : this->m_stageleader_meta->m_mona_addresses_map) {
-            // put current thallium addr into the vector and return it to the
-            // client
-            thalliumAddrs.push_back(p.first);
+            // put current margo addr into the vector and return it //
+            // thalliumAddrs.push_back(p.first);
+            memcpy(margoAddrsList.raw_obj + offset * 256, p.first.c_str(),
+                   p.first.size());
+            offset++;
         }
     }
-    req.respond(thalliumAddrs);
+
+    // free the update_addrs_existing
+    // free the update_addrs_all
+
+    if(update_addrs_existing.added_list.raw_obj != NULL) {
+        free(update_addrs_existing.added_list.raw_obj);
+    }
+
+    if(update_addrs_existing.removed_list.raw_obj != NULL) {
+        free(update_addrs_existing.added_list.raw_obj);
+    }
+
+    if(update_addrs_all.added_list.raw_obj != NULL) {
+        free(update_addrs_all.added_list.raw_obj);
+    }
+
+    if(update_addrs_all.removed_list.raw_obj != NULL) {
+        free(update_addrs_all.added_list.raw_obj);
+    }
+
+    return margoAddrsList;
 }
 
 void Addrmanager_setExpectedNum(dspaces_provider_t server, int &iteration,
@@ -367,5 +483,11 @@ void Addrmanager_decreasekExpectedNum(int k)
     } else {
         throw std::runtime_error("the expected number equal or less than zero");
     }
+    return;
+}
+
+void Addrmanager_addMonaInstance(mona_instance_t mona)
+{
+    m_stagingcommon_meta.m_mona = mona;
     return;
 }
