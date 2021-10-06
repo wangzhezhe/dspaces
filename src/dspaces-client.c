@@ -4,6 +4,7 @@
  *
  * See COPYRIGHT in top-level directory.
  */
+#include "addrmanager-client.hpp"
 #include "dspaces.h"
 #include "dspacesp.h"
 #include "gspace.h"
@@ -11,14 +12,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-#include <mpi.h>
 
 #define DEBUG_OUT(args...)                                                     \
     do {                                                                       \
@@ -67,6 +67,8 @@ struct dspaces_client {
     hg_id_t sub_id;
     hg_id_t notify_id;
     hg_id_t execute_id;
+    hg_id_t syncview_id;
+    hg_id_t set_expected_servernum_id;
 
     struct dc_gspace *dcg;
     char **server_address; // this stores all the server addresses
@@ -547,7 +549,10 @@ static int dspaces_init_margo(dspaces_client_t client,
                               &client->query_meta_id, &flag);
         margo_registered_name(client->mid, "execute_rpc", &client->execute_id,
                               &flag);
-
+        margo_registered_name(client->mid, "syncview_rpc", &client->syncview_id,
+                              &flag);
+        margo_registered_name(client->mid, "set_expected_servernum_rpc",
+                              &client->set_expected_servernum_id, &flag);
     } else {
         client->put_id = MARGO_REGISTER(client->mid, "put_rpc", bulk_gdim_t,
                                         bulk_out_t, NULL);
@@ -597,6 +602,12 @@ static int dspaces_init_margo(dspaces_client_t client,
                                           HG_TRUE);
         client->execute_id =
             MARGO_REGISTER(client->mid, "execute_rpc", int32_t, int32_t, NULL);
+
+        client->syncview_id = MARGO_REGISTER(
+            client->mid, "syncview_rpc", syncview_in_t, syncview_out_t, NULL);
+
+        client->set_expected_servernum_id = MARGO_REGISTER(
+            client->mid, "set_expected_servernum_rpc", int32_t, int32_t, NULL);
     }
 
     return (dspaces_SUCCESS);
@@ -615,6 +626,138 @@ static int dspaces_post_init(dspaces_client_t client)
     client->f_final = 0;
 
     return (dspaces_SUCCESS);
+}
+
+// this is supposed to be called by the leader process
+int dspaces_set_expected_servernum(dspaces_client_t client,
+                                   int expected_servernum)
+{
+    // call the server rpc
+    hg_handle_t handle;
+    hg_return_t hret;
+
+    // get leader str
+    char *leaderServerAddr = ClientAddrGetLeaderAddr();
+    hg_addr_t server_addr;
+    margo_addr_lookup(client->mid, leaderServerAddr, &server_addr);
+
+    char addr_str[128];
+    size_t addr_str_size = 128;
+    margo_addr_to_string(client->mid, addr_str, &addr_str_size, server_addr);
+
+    DEBUG_OUT(
+        "dspaces_set_expected_servernum leader send to leader server %s\n",
+        addr_str);
+
+    hret = margo_create(client->mid, server_addr, client->set_expected_servernum_id, &handle);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n", __func__,
+                hret);
+        return dspaces_ERR_MERCURY;
+    }
+    // prepare input
+    int32_t set_servernum_in = expected_servernum;
+    int32_t set_servernum_out;
+
+    hret = margo_forward(handle, &set_servernum_in);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
+                __func__, hret);
+        goto err_hg_handle;
+    }
+
+    hret = margo_get_output(handle, &set_servernum_out);
+    if(hret != HG_SUCCESS) {
+        fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",
+                __func__, hret);
+        goto err_hg_handle;
+    }
+
+err_hg_output:
+    margo_free_output(handle, &set_servernum_out);
+err_hg_handle:
+    margo_destroy(handle);
+    return dspaces_ERR_MERCURY;
+}
+
+int dspaces_syncview(dspaces_client_t client, int iteration, int ifleader)
+{
+    hg_handle_t handle;
+    hg_return_t hret;
+    syncview_out_t syncview_out;
+
+    if(ifleader == 1) {
+        // get leader str
+        char *leaderServerAddr = ClientAddrGetLeaderAddr();
+        hg_addr_t server_addr;
+        margo_addr_lookup(client->mid, leaderServerAddr, &server_addr);
+
+        char addr_str[128];
+        size_t addr_str_size = 128;
+        margo_addr_to_string(client->mid, addr_str, &addr_str_size,
+                             server_addr);
+
+        DEBUG_OUT("dspaces_syncview leader send to leader server %s\n",
+                  addr_str);
+
+        hret = margo_create(client->mid, server_addr, client->syncview_id,
+                            &handle);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_create() failed with %d.\n",
+                    __func__, hret);
+            return dspaces_ERR_MERCURY;
+        }
+        // prepare input
+        syncview_in_t syncview_in;
+        syncview_in.iteration = iteration;
+        syncview_in.clientprocess = ClientAddrGetStageViewSize();
+
+        hret = margo_forward(handle, &syncview_in);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_forward() failed with %d.\n",
+                    __func__, hret);
+            goto err_hg_handle;
+        }
+
+        hret = margo_get_output(handle, &syncview_out);
+        if(hret != HG_SUCCESS) {
+            fprintf(stderr, "ERROR: %s: margo_get_output() failed with %d.\n",
+                    __func__, hret);
+            goto err_hg_handle;
+        }
+
+        DEBUG_OUT("syncview output size: %d\n", syncview_out.addrlist.size);
+
+        // leader sync
+        // get client processes number
+        // send it to the staging service
+
+        // get an list
+
+        // if the list size is 0 do nothing
+
+        // if the list size is larger than 0
+
+        // send this list to the addrmanager client
+
+        // update the flag
+        return 0;
+
+    } else if(ifleader == 0) {
+        // worker sync
+        return 0;
+
+    } else {
+        fprintf(stderr, "ERROR: %s: ifleader should be either 0 or 1.\n",
+                __func__);
+        return -1;
+    }
+
+err_hg_output:
+    margo_free_output(handle, &syncview_out);
+err_hg_handle:
+    margo_destroy(handle);
+    return dspaces_ERR_MERCURY;
 }
 
 int dspaces_init(int rank, dspaces_client_t *c, struct hg_init_info *hii_ptr)

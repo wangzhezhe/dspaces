@@ -341,7 +341,7 @@ MERCURY_GEN_PROC(update_addrs_in_t, ((obj_t)(added_list))\
 MERCURY_GEN_PROC(update_addrs_out_t, ((int32_t)(ret)))
 
 MERCURY_GEN_PROC(syncview_in_t, ((int32_t)(iteration))\
-                                     ((int32_t)(expectedprocess)))
+                                     ((int32_t)(clientprocess)))
 MERCURY_GEN_PROC(syncview_out_t, ((obj_t)(addrlist)))
 
 

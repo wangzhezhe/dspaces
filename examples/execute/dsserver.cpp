@@ -47,6 +47,8 @@ int main(int argc, char **argv)
 
     if(strcmp(status, "elastic") == 0) {
         group_elastic = 1;
+        std::cout << "This is the elastic group" << std::endl;
+
     }
 
     dspaces_provider_t s = dspaces_PROVIDER_NULL;
@@ -154,12 +156,13 @@ int main(int argc, char **argv)
     std::cout << "MoNA address is " << std::string(mona_addr_buf) << std::endl;
 
     // assign the mona instance to the addrmanager
-    
+
 
     // init the server
     // then register the mona addr to the master
     int init_ret = dspaces_server_init_mona(listen_addr_str, gcomm, &s,
-                                            mona_addr_buf, group_elastic, &hii);
+                                            mona, mona_addr_buf, group_elastic, &hii);
+
     if(init_ret != 0)
         return init_ret;
 

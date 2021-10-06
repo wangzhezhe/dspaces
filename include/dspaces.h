@@ -331,6 +331,24 @@ int dspaces_get_meta(dspaces_client_t client, char *name, int mode,
  */
 int dspaces_execute(dspaces_client_t client, int32_t iteration, int rank);
 
+/**
+ * @brief wait the finish for staging sync, and return updated addr list
+ *
+ *
+ * @param[in] client dspaces client
+ * @param[in] iteration number
+ * @param[in] if the current process is the leader
+ */
+int dspaces_syncview(dspaces_client_t client, int iteration, int ifleader);
+
+/**
+ * @brief set the expected process number to the data staging service
+ *
+ *
+ * @param[in] client dspaces client
+ * @param[in] expected servernum
+ */
+int dspaces_set_expected_servernum(dspaces_client_t client, int expected_servernum);
 
 #if defined(__cplusplus)
 }

@@ -6,14 +6,14 @@
 #SBATCH --constraint=haswell
 
 #set necessary env
-#export DSPACES_DEBUG=1
+export DSPACES_DEBUG=1
 export DSPACES_NUM_HANDLERS=4
-export TOTALBLOCKNUM=2048
+export TOTALBLOCKNUM=32
 export SCRIPTNAME=mbrender_64_iso.py
 export BLOCKLEN=64
 
 # remove unnecessary things
-rm dspaces_drc.config conf.ds *.png ds_leader_addr.conf
+rm dspaces_drc.config conf.ds *.png ds_leader_addr.conf dsclient_drc_elastic.log dsserver_drc_init.log dsserver_drc_elastic.log 
 rm core
 
 ulimit -c unlimited
@@ -31,6 +31,7 @@ SERVERPROCESS=4
 # start the server
 srun -C haswell -l -N 1 -n $SERVERPROCESS ./bin/dsserver_drc gni init &> dsserver_drc_init.log &
 
+
 while [ ! -f conf.ds ]
 do
   sleep 1 
@@ -47,7 +48,13 @@ done
 
 #when all init server process start, we may try to start elastic group
 
-srun -C haswell -l -N 1 -n 2 ./bin/dsserver_drc gni elastic &> dsserver_drc_elastic.log &
+sleep 1
+
+srun -C haswell -l -N 1 -n 1 ./bin/dsclient_drc_elastic $BLOCKLEN $TOTALBLOCKNUM 0 $SERVERPROCESS &> dsclient_drc_elastic.log &
+
+
+# start a elastic one (it looks ok if we only start the elastic)
+# srun -C haswell -l -N 1 -n 1 ./bin/dsserver_drc gni elastic &> dsserver_drc_elastic.log &
 
 
 wait

@@ -41,6 +41,13 @@ find_package (mercury REQUIRED)
 pkg_check_modules (ARGOBOTS REQUIRED IMPORTED_TARGET argobots)
 
 
+#if the cpath is not updated, we may use this way to find the mona
+#find_package (PkgConfig REQUIRED)
+#pkg_check_modules (MONA REQUIRED IMPORTED_TARGET mona)
+#link against PkgConfig::MONA
+#updates the CPATH manually (add spack view into it)
+#CPATH="/global/cscratch1/sd/zw241/colza-experiments/cori/vtk/sw/spack/var/spack/environments/colza-env/.spack-env/view/include:$CPATH"
+
 set(instagingexecution-src
 ${dspaces_SOURCE_DIR}/src/ss_data.c
 instagingexecution.cpp
@@ -58,7 +65,7 @@ MPI::MPI_C)
 
 set(dspaces-drc-server 
 dsserver.cpp
-${dspaces_SOURCE_DIR}/src/addrmanager.cpp
+${dspaces_SOURCE_DIR}/src/addrmanager-server.cpp
 ${dspaces_SOURCE_DIR}/src/util.c 
 ${dspaces_SOURCE_DIR}/src/bbox.c 
 ${dspaces_SOURCE_DIR}/src/ss_data.c
@@ -67,12 +74,25 @@ ${dspaces_SOURCE_DIR}/src/dspaces-server.c
 add_executable(dsserver_drc ${dspaces-drc-server})
 target_link_libraries(dsserver_drc margo MPI::MPI_C ${DRC_LIBRARIES} instagingexecution mona mercury PkgConfig::ARGOBOTS)
 
+get_property(inc_dirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
+foreach(dir ${dirs})
+  message(STATUS "dir='${dir}'")
+endforeach()
 
 set(dspaces-drc-client sim.cpp 
+${dspaces_SOURCE_DIR}/src/addrmanager-client.cpp
 ${dspaces_SOURCE_DIR}/src/util.c 
 ${dspaces_SOURCE_DIR}/src/bbox.c 
 ${dspaces_SOURCE_DIR}/src/ss_data.c
 ${dspaces_SOURCE_DIR}/src/dspaces-client.c)
 add_executable(dsclient_drc ${dspaces-drc-client})
-
 target_link_libraries(dsclient_drc margo MPI::MPI_C ${DRC_LIBRARIES})
+
+set(dspaces-drc-client-elastic sim_elastic.cpp 
+${dspaces_SOURCE_DIR}/src/addrmanager-client.cpp
+${dspaces_SOURCE_DIR}/src/util.c 
+${dspaces_SOURCE_DIR}/src/bbox.c 
+${dspaces_SOURCE_DIR}/src/ss_data.c
+${dspaces_SOURCE_DIR}/src/dspaces-client.c)
+add_executable(dsclient_drc_elastic ${dspaces-drc-client-elastic})
+target_link_libraries(dsclient_drc_elastic margo MPI::MPI_C ${DRC_LIBRARIES})
