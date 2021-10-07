@@ -726,7 +726,10 @@ int dspaces_syncview(dspaces_client_t client, int iteration, int ifleader)
             goto err_hg_handle;
         }
 
-        DEBUG_OUT("syncview output size: %d\n", syncview_out.addrlist.size);
+        DEBUG_OUT("syncview output size: %d\n", syncview_out.addrlist.size/256);
+
+        ClientAddrUpdateStageView(syncview_out);
+
 
         // leader sync
         // get client processes number

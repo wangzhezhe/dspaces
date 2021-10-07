@@ -461,9 +461,10 @@ obj_t Addrmanager_syncview(dspaces_provider_t server, int iteration,
     obj_t margoAddrsList;
 
     ABT_mutex_lock(m_stageleader_meta.m_monaAddrmap_mtx);
-    margoAddrsList.size = m_stageleader_meta.m_mona_addresses_map.size();
+    // this stores the total size, it is k*256
+    margoAddrsList.size = m_stageleader_meta.m_mona_addresses_map.size() * 256;
     margoAddrsList.raw_obj =
-        (char *)calloc(256 * margoAddrsList.size, sizeof(char));
+        (char *)calloc(margoAddrsList.size, sizeof(char));
 
     int offset = 0;
     for(auto &p : m_stageleader_meta.m_mona_addresses_map) {
@@ -577,13 +578,13 @@ void Addrmanager_updateAddrList(update_addrs_in_t update_addrs_in)
 
             m_member_addrs.push_back(addr);
         }
-
+        std::cout << "debug, m_member_addrs.size " << m_member_addrs.size() << std::endl;
         na_return_t ret = mona_comm_create(
             m_stagingcommon_meta.m_mona, m_member_addrs.size(),
             m_member_addrs.data(), &(m_stagingcommon_meta.m_mona_comm));
         if(ret != 0) {
-            spdlog::debug("{}: MoNA communicator creation failed",
-                          __FUNCTION__);
+            spdlog::debug("{}: MoNA communicator creation failed, return value is {}",
+                          __FUNCTION__, ret);
             throw std::runtime_error("failed to init mona communicator");
         }
         spdlog::debug("recreate the mona_comm, addr size {}",

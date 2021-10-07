@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --qos=debug
-#SBATCH --nodes=2
+#SBATCH --nodes=3
 #SBATCH --time=5:00
 #SBATCH --licenses=cscratch1
 #SBATCH --constraint=haswell
@@ -11,9 +11,10 @@ export DSPACES_NUM_HANDLERS=4
 export TOTALBLOCKNUM=32
 export SCRIPTNAME=mbrender_64_iso.py
 export BLOCKLEN=64
+export ADDSERVERCONFIGPATH=./
 
 # remove unnecessary things
-rm dspaces_drc.config conf.ds *.png ds_leader_addr.conf dsclient_drc_elastic.log dsserver_drc_init.log dsserver_drc_elastic.log 
+rm dspaces_drc.config conf.ds *.png ds_leader_addr.conf dsclient_drc_elastic.log dsserver_drc_init.log dsserver_drc_elastic*.log 
 rm core
 
 ulimit -c unlimited
@@ -27,10 +28,10 @@ cp ~/cworkspace/src/dspaces/examples/execute/dataspaces.conf .
 cp ~/cworkspace/src/dspaces/examples/execute/mbrender_64_iso.py .
 
 SERVERPROCESS=4
+ELASTICITYSERVERNUM=1
 
 # start the server
 srun -C haswell -l -N 1 -n $SERVERPROCESS ./bin/dsserver_drc gni init &> dsserver_drc_init.log &
-
 
 while [ ! -f conf.ds ]
 do
@@ -50,11 +51,38 @@ done
 
 sleep 1
 
-srun -C haswell -l -N 1 -n 1 ./bin/dsclient_drc_elastic $BLOCKLEN $TOTALBLOCKNUM 0 $SERVERPROCESS &> dsclient_drc_elastic.log &
+srun -C haswell -l -N 1 -n 1 ./bin/dsclient_drc_elastic $BLOCKLEN $TOTALBLOCKNUM $ELASTICITYSERVERNUM $SERVERPROCESS &> dsclient_drc_elastic.log &
 
+# start a new server when it detects sth, such as the configuration file from the client
+# get this value from the env
+x=1
+while true;
+do
+# this can be a signal to say that a new server should be started
+# there might multiple config files
+# we continue create server if there exist config
+result=`ls addserver.config* |wc -l`
+if [ $result -eq 0 ]
+then
+  sleep 1
+else
+  # start one process and remove one
+  echo "config is detected $(date)"
+  echo "start one process"
+  fileName=`ls addserver.config* |sed -n '1p'`
+  echo "remove ${fileName}"
+  rm $fileName
+  echo "remove filename ${fileName} $(date)"
 
-# start a elastic one (it looks ok if we only start the elastic)
-# srun -C haswell -l -N 1 -n 1 ./bin/dsserver_drc gni elastic &> dsserver_drc_elastic.log &
+  # start the another server if there is leave message
+  # there are some issue if we start by system call
+  # the original process can not recognized as leave in that case
+  # start a elastic one (it looks ok if we only start the elastic)
+  srun -C haswell -l -N 1 -n 1 ./bin/dsserver_drc gni elastic &> dsserver_drc_elastic$x.log &
 
+  echo "srun is called for elasticserver$x at $(date)"
+  x=$(( $x + 1 ))
+fi
+done
 
 wait

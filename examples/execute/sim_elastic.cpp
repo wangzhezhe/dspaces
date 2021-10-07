@@ -179,25 +179,22 @@ int main(int argc, char **argv)
          * sync it */
 
         if(availableElasticProcess > 0 && timestep > 0) {
-            if(rank == 0) {
-                // leader process can update the expected value
-                // this can also be viewd as a controller
-                // the controller will set the expected staging value based on
-                // different conditions
-            }
             // write out a configure file to start new staging service
-            if(rank == 0) {
+            if(rank == 0 && timestep == 1) {
+                // naive strategy
                 // update the expected server value
-                std::string leaveConfigPath = getenv("LEAVECONFIGPATH");
-                // the LEAVECONFIGPATH contains the
-                static std::string leaveFileName = leaveConfigPath +
-                                                   "clientleave.config" +
-                                                   std::to_string(rank);
+                std::string leaveConfigPath = getenv("ADDSERVERCONFIGPATH");
+                // the ADDSERVERCONFIGPATH contains the
+                static std::string leaveFileName =
+                    leaveConfigPath + "addserver.config" + std::to_string(rank);
                 std::cout << "leaveFileName is " << leaveFileName << std::endl;
                 std::ofstream leaveFile;
                 leaveFile.open(leaveFileName);
                 leaveFile << "test\n";
                 leaveFile.close();
+
+                // reset the expected number at the server side
+                dspaces_set_expected_servernum(client, expectedServerNum + 1);
             }
         }
 
